@@ -1,0 +1,42 @@
+# Local IDE settings and SDK paths
+.idea/
+*.iml
+local.properties
+
+# Build output and caches (keep the Gradle Wrapper JAR)
+.gradle/
+.kotlin/
+**/build/
+.externalNativeBuild/
+.cxx/
+captures/
+*.apk
+*.aab
+*.apks
+*.hprof
+
+# Reference checkout, emulator diagnostics and local test output
+/tmp/
+/.local/
+*.log
+__pycache__/
+*.pyc
+
+# Credentials, signing keys and runtime data
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+keystore.properties
+*.pem
+*.p12
+*.pfx
+*.db
+*.db-shm
+*.db-wal
+
+# Operating system files
+.DS_Store
+Thumbs.db
+desktop.ini
