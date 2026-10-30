@@ -1,4 +1,4 @@
-"""Validate release identity and collect Android APKs without exposing signing material."""
+"""Validate release identity and collect Debug and unsigned Release APKs."""
 
 import hashlib
 import json
@@ -28,16 +28,13 @@ def release_plan(source: str, env: dict) -> dict:
     return {"version": version, "tag": tag, "publish": str(publish).lower(), "prerelease": str("-" in version).lower()}
 
 
-def package_apks(root: Path, plan: dict, signed: bool) -> list:
-    if plan["publish"] == "true" and not signed:
-        raise ValueError("A published release requires a signed release APK")
+def package_apks(root: Path, plan: dict) -> list:
     dist = root / "dist"
     dist.mkdir(exist_ok=True)
     if any(dist.iterdir()):
         raise ValueError("dist must be empty; refusing to include artifacts from an earlier build")
-    variants = ["release"] if plan["publish"] == "true" else ["debug", "release"]
     artifacts = []
-    for variant in variants:
+    for variant in ["debug", "release"]:
         directory = root / "app/build/outputs/apk" / variant
         metadata = json.loads((directory / "output-metadata.json").read_text(encoding="utf-8"))
         elements = metadata["elements"]
@@ -49,7 +46,9 @@ def package_apks(root: Path, plan: dict, signed: bool) -> list:
         output = Path(element["outputFile"])
         if output.name != str(output):
             raise ValueError("Unexpected APK output path")
-        suffix = variant if variant == "debug" or signed else "release-unsigned"
+        suffix = "debug" if variant == "debug" else "release-unsigned"
+        if output.name != f"app-{suffix}.apk":
+            raise ValueError(f"Expected app-{suffix}.apk; refusing to mislabel a different build")
         destination = dist / f"android-sms-webhook-{plan['tag']}-{suffix}.apk"
         shutil.copyfile(directory / output, destination)
         artifacts.append(destination)
@@ -61,7 +60,7 @@ def package_apks(root: Path, plan: dict, signed: bool) -> list:
 def main() -> None:
     plan = release_plan((ROOT / "app/build.gradle.kts").read_text(encoding="utf-8"), os.environ)
     if "--package" in sys.argv:
-        for artifact in package_apks(ROOT, plan, os.environ.get("SIGNED_BUILD") == "true"):
+        for artifact in package_apks(ROOT, plan):
             print(artifact.name)
         return
     commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()

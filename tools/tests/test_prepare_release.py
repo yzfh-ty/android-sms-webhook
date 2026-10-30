@@ -39,33 +39,37 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 release.release_plan(source, {})
 
-    def test_publishing_unsigned_apk_is_rejected(self):
-        with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory, self.assertRaises(ValueError):
-            release.package_apks(Path(directory), {"publish": "true"}, signed=False)
-
-    def test_build_only_labels_unsigned_artifacts_and_produces_checksums(self):
+    def package_fixture(self, publish):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
             for variant in ["debug", "release"]:
                 output = root / "app/build/outputs/apk" / variant
                 output.mkdir(parents=True)
-                (output / "app.apk").write_bytes(f"fixture-{variant}".encode())
+                filename = "app-debug.apk" if variant == "debug" else "app-release-unsigned.apk"
+                (output / filename).write_bytes(f"fixture-{variant}".encode())
                 (output / "output-metadata.json").write_text(json.dumps({"applicationId": "com.tyverse.smswebhook",
-                    "elements": [{"outputFile": "app.apk", "versionName": "0.3.1"}]}))
-            artifacts = release.package_apks(root, {"publish": "false", "tag": "v0.3.1", "version": "0.3.1"}, signed=False)
+                    "elements": [{"outputFile": filename, "versionName": "0.3.1"}]}))
+            artifacts = release.package_apks(root, {"publish": publish, "tag": "v0.3.1", "version": "0.3.1"})
             self.assertEqual(2, len(artifacts))
+            self.assertTrue(artifacts[0].name.endswith("-debug.apk"))
             self.assertTrue(artifacts[1].name.endswith("release-unsigned.apk"))
             self.assertEqual(2, len((root / "dist/SHA256SUMS.txt").read_text().splitlines()))
+
+    def test_build_only_labels_unsigned_artifacts_and_produces_checksums(self):
+        self.package_fixture("false")
+
+    def test_publishing_requires_no_signing_configuration(self):
+        self.package_fixture("true")
 
     def test_qa_apk_cannot_be_published_as_normal_app(self):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
-            output = root / "app/build/outputs/apk/release"
+            output = root / "app/build/outputs/apk/debug"
             output.mkdir(parents=True)
             (output / "output-metadata.json").write_text(json.dumps({"applicationId": "com.tyverse.smswebhook.qa",
-                "elements": [{"outputFile": "app.apk", "versionName": "0.3.1"}]}))
+                    "elements": [{"outputFile": "app-debug.apk", "versionName": "0.3.1"}]}))
             with self.assertRaises(ValueError):
-                release.package_apks(root, {"publish": "true", "tag": "v0.3.1", "version": "0.3.1"}, signed=True)
+                release.package_apks(root, {"publish": "true", "tag": "v0.3.1", "version": "0.3.1"})
 
 
 if __name__ == "__main__":

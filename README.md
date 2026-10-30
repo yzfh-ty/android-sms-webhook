@@ -50,9 +50,9 @@ SDK 配置：`minSdk = 26`、`compileSdk = 37`、`targetSdk = 36`。AGP 9.5.0，
 .\gradlew.bat assembleDebug
 ```
 
-Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。未配置签名时 Release 为未签名包；配置签名环境变量后可生成正式签名 APK。
+Debug APK：`app/build/outputs/apk/debug/app-debug.apk`，构建工具自动使用开发签名，可直接安装。Release APK：`app/build/outputs/apk/release/app-release-unsigned.apk`，保持未签名。
 
-GitHub Actions 支持手动构建/发布，以及推送 `v*` 标签自动发布签名 Release。需先配置 4 项签名 Secrets；手动取消 `publish_release` 可在无签名配置时仅构建。具体步骤见 [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)。
+GitHub Actions 支持手动构建/发布，以及推送 `v*` 标签自动创建 GitHub Release，附上 Debug 与未签名 Release APK。无需签名 Secrets，直接安装请选择 `-debug.apk`。具体步骤见 [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)。
 
 本机企业微信模拟接口，只监听 127.0.0.1，不向真实群发送消息：
 

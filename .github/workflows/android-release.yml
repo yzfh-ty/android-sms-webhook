@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish a signed GitHub Release (requires signing secrets)
+        description: Publish Debug and unsigned Release APKs (no signing secrets needed)
         type: boolean
         default: true
       tag:
@@ -48,33 +48,6 @@ jobs:
       - name: Test release validation and packaging
         run: python3 -m unittest discover -s tools/tests -v
 
-      - name: Prepare release signing
-        id: signing
-        env:
-          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
-          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [[ -z "$KEYSTORE_BASE64$STORE_PASSWORD$KEY_ALIAS$KEY_PASSWORD" ]]; then
-            if [[ "$PUBLISH_RELEASE" == "true" ]]; then
-              echo "::error::Configure ANDROID_KEYSTORE_BASE64, ANDROID_STORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD to publish signed APKs."
-              exit 1
-            fi
-            echo "signed=false" >> "$GITHUB_OUTPUT"
-          else
-            : "${KEYSTORE_BASE64:?Missing ANDROID_KEYSTORE_BASE64}"
-            : "${STORE_PASSWORD:?Missing ANDROID_STORE_PASSWORD}"
-            : "${KEY_ALIAS:?Missing ANDROID_KEY_ALIAS}"
-            : "${KEY_PASSWORD:?Missing ANDROID_KEY_PASSWORD}"
-            umask 077
-            printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/android-release.jks"
-            echo "keystore=$RUNNER_TEMP/android-release.jks" >> "$GITHUB_OUTPUT"
-            echo "signed=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Set up Java 25
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
@@ -90,20 +63,12 @@ jobs:
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Test, lint and build APKs
-        env:
-          ANDROID_KEYSTORE_PATH: ${{ steps.signing.outputs.keystore }}
-          ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
-          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: bash ./gradlew --no-daemon --no-configuration-cache testDebugUnitTest lintDebug assembleDebug assembleRelease
 
-      - name: Verify release APK signature
-        if: steps.signing.outputs.signed == 'true'
-        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/release/app-release.apk'
+      - name: Verify installable Debug APK
+        run: '"$ANDROID_HOME/build-tools/36.0.0/apksigner" verify --verbose app/build/outputs/apk/debug/app-debug.apk'
 
       - name: Collect APKs and checksums
-        env:
-          SIGNED_BUILD: ${{ steps.signing.outputs.signed }}
         run: python3 tools/prepare_release.py --package
 
       - name: Upload APKs
@@ -125,10 +90,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
-      - name: Remove temporary keystore
-        if: always()
-        run: rm -f -- "$RUNNER_TEMP/android-release.jks"
-
   release:
     needs: build
     if: needs.build.outputs.publish == 'true'
@@ -137,7 +98,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - name: Download verified release APK
+      - name: Download APKs and checksums
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: android-apks
@@ -157,4 +118,5 @@ jobs:
           flags=()
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
           gh release create "$RELEASE_TAG" dist/* --target "$RELEASE_COMMIT" \
-            --title "$RELEASE_TAG" --generate-notes "${flags[@]}"
+            --title "$RELEASE_TAG" --generate-notes \
+            --notes 'Install the Debug APK. The release-unsigned APK is not directly installable.' "${flags[@]}"
