@@ -4,6 +4,13 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
+val releaseSigningValues = listOf("ANDROID_KEYSTORE_PATH", "ANDROID_STORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD")
+    .associateWith { providers.environmentVariable(it).orNull?.takeIf(String::isNotBlank) }
+val hasReleaseSigning = releaseSigningValues.values.all { it != null }
+require(releaseSigningValues.values.none { it != null } || hasReleaseSigning) {
+    "Release signing requires ANDROID_KEYSTORE_PATH, ANDROID_STORE_PASSWORD, ANDROID_KEY_ALIAS and ANDROID_KEY_PASSWORD"
+}
+
 android {
     namespace = "com.tyverse.smswebhook"
     compileSdk {
@@ -14,17 +21,24 @@ android {
         applicationId = "com.tyverse.smswebhook"
         minSdk = 26
         targetSdk = 36
-        versionCode = 4
-        versionName = "0.3.0"
+        versionCode = 5
+        versionName = "0.3.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    if (hasReleaseSigning) signingConfigs.create("release") {
+        storeFile = file(requireNotNull(releaseSigningValues["ANDROID_KEYSTORE_PATH"]))
+        storePassword = releaseSigningValues["ANDROID_STORE_PASSWORD"]
+        keyAlias = releaseSigningValues["ANDROID_KEY_ALIAS"]
+        keyPassword = releaseSigningValues["ANDROID_KEY_PASSWORD"]
+    }
     buildTypes {
         getByName("debug") {
             if (providers.gradleProperty("isolatedTestApp").orNull == "true") applicationIdSuffix = ".qa"
         }
         release {
+            if (hasReleaseSigning) signingConfig = signingConfigs.getByName("release")
             optimization {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")

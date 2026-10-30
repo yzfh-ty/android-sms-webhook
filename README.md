@@ -4,7 +4,7 @@ Kotlin 原生 Android 短信通知与 eSIM 到期管理工具。短信通过**�
 
 ## 当前功能
 
-0.3.0 开发版，目标设备为 Android 16：
+0.3.1 开发版，目标设备为 Android 16：
 
 - 只需粘贴完整机器人 Webhook；地址中的 key 加密保存，默认隐藏。
 - 短信先加密落盘，再由 WorkManager 投递，支持过滤、去重和断网恢复。
@@ -15,6 +15,7 @@ Kotlin 原生 Android 短信通知与 eSIM 到期管理工具。短信通过**�
 - 手动录入多张 eSIM 卡片和备注，每卡独立设置到期时间、提前量、重复间隔和提醒渠道。
 - 每卡按天或日历月设置续期周期，“已续期”经确认后从当前时刻重新计算，并取消旧周期待发提醒。
 - 卡片备注、号码和运营商资料加密保存，备注默认不随提醒外发；卡片提醒独立于短信转发开关。
+- 卡片列表可直接编辑，详情顶部固定显示“编辑卡片”和“已续期”，长备注不遮挡入口。
 - 可选 Root 授权检测、省电白名单添加及撤销，开机解锁后恢复队列。
 
 真实手机短信、双卡、Root 管理器和厂商长期熄屏表现仍需真机验证。当前不包含独立 Root 看门狗、历史收件箱补偿、多机器人路由或其他通知平台。
@@ -49,7 +50,9 @@ SDK 配置：`minSdk = 26`、`compileSdk = 37`、`targetSdk = 36`。AGP 9.5.0，
 .\gradlew.bat assembleDebug
 ```
 
-Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。Release 构建生成未签名文件，不是正式发行包。
+Debug APK：`app/build/outputs/apk/debug/app-debug.apk`。未配置签名时 Release 为未签名包；配置签名环境变量后可生成正式签名 APK。
+
+GitHub Actions 支持手动构建/发布，以及推送 `v*` 标签自动发布签名 Release。需先配置 4 项签名 Secrets；手动取消 `publish_release` 可在无签名配置时仅构建。具体步骤见 [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)。
 
 本机企业微信模拟接口，只监听 127.0.0.1，不向真实群发送消息：
 
@@ -65,6 +68,7 @@ python tools/dev_webhook.py --mode ok
 - [原生开发文档](docs/原生开发文档.md)
 - [实现与验证记录](docs/实现与验证记录.md)
 - [eSIM 卡到期提醒与备注需求文档](docs/eSIM卡到期提醒与备注需求文档.md)
+- [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)
 
 参考了本地 `tmp/SmsForwarder` 的短信、规则、企业微信发送和省电配置设计，核心实现独立编写。参考目录、IDE 设置、构建产物、日志、本地配置和密钥均已排除在版本跟踪之外。
 

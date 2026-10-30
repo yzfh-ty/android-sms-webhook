@@ -10,6 +10,7 @@ local.properties
 .externalNativeBuild/
 .cxx/
 captures/
+/dist/
 *.apk
 *.aab
 *.apks

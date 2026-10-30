@@ -34,6 +34,11 @@ class EsimRepository(
         .flowOn(Dispatchers.IO)
     val results = dao.observeResults().map { rows -> rows.associateBy { it.event.cardId } }
 
+    suspend fun get(id: String): EsimCardView = withContext(Dispatchers.IO) {
+        val card = dao.get(id) ?: throw UserInputException("卡片已删除，请返回列表")
+        EsimCardView(card, decodeInfo(card.infoCipher))
+    }
+
     suspend fun save(draft: EsimDraft) = withContext(Dispatchers.IO) {
         validate(draft)
         mutation.withLock {

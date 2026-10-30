@@ -18,6 +18,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -45,60 +46,65 @@ fun EsimPage(model: RelayViewModel, permissions: PermissionState, busy: Boolean,
     LaunchedEffect(Unit) { while (true) { now = System.currentTimeMillis(); delay(30_000) } }
     BackHandler(enabled = target != null && draft == null) { model.closeCard() }
     val selected = cards.find { it.card.id == target }
-    LazyColumn(state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-        item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (target == null) "${cards.size} 张卡片" else "卡片详情", style = MaterialTheme.typography.titleLarge)
-                if (target == null) Button(onClick = model::newCard, enabled = !busy) { Text("添加卡片") }
-                else TextButton(onClick = model::closeCard) { Text("返回列表") }
+    Column(Modifier.fillMaxSize()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(if (target == null) "${cards.size} 张卡片" else "卡片详情", modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge)
+            if (target == null) Button(onClick = model::newCard, enabled = !busy) { Text("添加卡片") }
+            else TextButton(onClick = model::closeCard) { Text("返回列表") }
+        }
+        if (selected != null) Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            OutlinedButton(onClick = { model.editCard(selected) }, enabled = !busy,
+                modifier = Modifier.weight(1f).testTag("edit-card-${selected.card.id}")) { Text("编辑卡片") }
+            Button(onClick = { renewing = selected }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("已续期") }
+        }
+        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth(), state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            if (!permissions.cardNotifications) item {
+                CardNotificationHint(permissions, requestNotifications, openSettings)
             }
-        }
-        if (!permissions.cardNotifications) item {
-            CardNotificationHint(permissions, requestNotifications, openSettings)
-        }
-        if (target != null) {
-            if (selected == null) item { Text("正在读取卡片；如该卡片已删除，请返回列表。") }
-            else {
-                item { EsimSummary(selected, now, onClick = {}, detailed = true) }
-                item {
-                    EsimPanel {
-                        val card = selected.card
-                        Text("提醒设置", style = MaterialTheme.typography.titleMedium)
-                        Text(if (card.reminderEnabled) "提前 ${durationText(card.leadMinutes)} · ${repeatText(card.repeatMinutes)}" else "提醒已关闭")
-                        Text("渠道：${channelText(card.localEnabled, card.wecomEnabled)}")
-                        Text("下次提醒：${when {
-                            !card.reminderEnabled -> "提醒已关闭"
-                            card.nextReminderAt == null -> "本周期已生成提醒"
-                            card.nextReminderAt <= now -> "等待提醒"
-                            else -> EsimPolicy.format(card.nextReminderAt, card.zoneId)
-                        }}")
-                        val result = results[card.id]?.takeIf { it.event.ruleVersion == card.ruleVersion }
-                        if (result != null) {
-                            Text("最近提醒：${EsimPolicy.format(result.event.createdAt, card.zoneId)}")
-                            if (card.localEnabled) Text("手机：${when (result.event.localState) {
-                                "POSTED" -> "已提交通知栏"; "BLOCKED" -> "通知不可用，等待授权或开启渠道"; else -> "等待提醒"
+            if (target != null) {
+                if (selected == null) item { Text("正在读取卡片；如该卡片已删除，请返回列表。") }
+                else {
+                    item { EsimSummary(selected, now, onClick = {}, detailed = true) }
+                    item {
+                        EsimPanel {
+                            val card = selected.card
+                            Text("提醒设置", style = MaterialTheme.typography.titleMedium)
+                            Text(if (card.reminderEnabled) "提前 ${durationText(card.leadMinutes)} · ${repeatText(card.repeatMinutes)}" else "提醒已关闭")
+                            Text("渠道：${channelText(card.localEnabled, card.wecomEnabled)}")
+                            Text("下次提醒：${when {
+                                !card.reminderEnabled -> "提醒已关闭"
+                                card.nextReminderAt == null -> "本周期已生成提醒"
+                                card.nextReminderAt <= now -> "等待提醒"
+                                else -> EsimPolicy.format(card.nextReminderAt, card.zoneId)
                             }}")
-                            if (card.wecomEnabled) Text("企业微信：${remoteText(result.remoteState)}")
-                            if (!result.remoteError.isNullOrBlank()) Text(result.remoteError, color = MaterialTheme.colorScheme.error)
-                            if (result.remoteState in listOf(DeliveryState.NEEDS_ATTENTION, DeliveryState.RETRY_WAIT))
-                                OutlinedButton(onClick = { model.retry(result.event.id) }, enabled = !busy) { Text("重试企业微信提醒") }
+                            val result = results[card.id]?.takeIf { it.event.ruleVersion == card.ruleVersion }
+                            if (result != null) {
+                                Text("最近提醒：${EsimPolicy.format(result.event.createdAt, card.zoneId)}")
+                                if (card.localEnabled) Text("手机：${when (result.event.localState) {
+                                    "POSTED" -> "已提交通知栏"; "BLOCKED" -> "通知不可用，等待授权或开启渠道"; else -> "等待提醒"
+                                }}")
+                                if (card.wecomEnabled) Text("企业微信：${remoteText(result.remoteState)}")
+                                if (!result.remoteError.isNullOrBlank()) Text(result.remoteError, color = MaterialTheme.colorScheme.error)
+                                if (result.remoteState in listOf(DeliveryState.NEEDS_ATTENTION, DeliveryState.RETRY_WAIT))
+                                    OutlinedButton(onClick = { model.retry(result.event.id) }, enabled = !busy) { Text("重试企业微信提醒") }
+                            }
+                            if (card.lastRenewedAt != null) Text("上次续期：${EsimPolicy.format(card.lastRenewedAt, card.zoneId)}")
                         }
-                        if (card.lastRenewedAt != null) Text("上次续期：${EsimPolicy.format(card.lastRenewedAt, card.zoneId)}")
+                    }
+                    item {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            TextButton(onClick = { deleting = selected.card }, enabled = !busy) { Text("删除卡片", color = MaterialTheme.colorScheme.error) }
+                        }
                     }
                 }
-                item {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = { renewing = selected }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("已续期") }
-                        OutlinedButton(onClick = { model.editCard(selected) }, enabled = !busy, modifier = Modifier.fillMaxWidth()) { Text("编辑卡片") }
-                        TextButton(onClick = { deleting = selected.card }, enabled = !busy) { Text("删除卡片", color = MaterialTheme.colorScheme.error) }
-                    }
+            } else {
+                if (cards.isEmpty()) item { EsimPanel { Text("还没有卡片"); Text("手动添加卡片，记录备注、到期时间和独立的续期周期。") } }
+                items(cards, key = { it.card.id }) { view ->
+                    EsimSummary(view, now, { model.openCard(view.card.id) }, onEdit = { model.editCard(view) }, busy = busy)
                 }
             }
-        } else {
-            if (cards.isEmpty()) item { EsimPanel { Text("还没有卡片"); Text("手动添加卡片，记录备注、到期时间和独立的续期周期。") } }
-            items(cards, key = { it.card.id }) { view -> EsimSummary(view, now, { model.openCard(view.card.id) }) }
+            item { Text("提醒可能受系统后台限制而延迟；恢复运行后会检查错过的提醒。", style = MaterialTheme.typography.bodySmall) }
         }
-        item { Text("提醒可能受系统后台限制而延迟；恢复运行后会检查错过的提醒。", style = MaterialTheme.typography.bodySmall) }
     }
     renewing?.let { snapshot ->
         val card = snapshot.card
@@ -121,11 +127,16 @@ fun EsimPage(model: RelayViewModel, permissions: PermissionState, busy: Boolean,
         text = { Text("卡片：${card.name}\n\n本卡资料和未发送提醒将被删除，已发送的企业微信消息会保留。") },
         confirmButton = { TextButton(onClick = { deleting = null; model.deleteCard(card) }, enabled = !busy) { Text("确认删除") } },
         dismissButton = { TextButton(onClick = { deleting = null }) { Text("取消") } }) }
-    draft?.let { EsimEditor(it, editorError, busy, permissions, requestNotifications, openSettings, model::dismissCardEditor, model::saveCard) }
+    draft?.let { value ->
+        key(value.id, value.revision) {
+            EsimEditor(value, editorError, busy, permissions, requestNotifications, openSettings, model::dismissCardEditor, model::saveCard)
+        }
+    }
 }
 
 @Composable
-private fun EsimSummary(view: EsimCardView, now: Long, onClick: () -> Unit, detailed: Boolean = false) {
+private fun EsimSummary(view: EsimCardView, now: Long, onClick: () -> Unit, detailed: Boolean = false,
+    onEdit: (() -> Unit)? = null, busy: Boolean = false) {
     val card = view.card
     val state = EsimPolicy.status(card.expiresAt, card.leadMinutes, now)
     Card(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
@@ -146,6 +157,8 @@ private fun EsimSummary(view: EsimCardView, now: Long, onClick: () -> Unit, deta
                     Text("备注\n${view.info.notes.ifBlank { "暂无备注" }}")
                 }
             } else if (view.info.notes.isNotEmpty()) Text(view.info.notes, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            if (onEdit != null) OutlinedButton(onClick = onEdit, enabled = !busy,
+                modifier = Modifier.testTag("edit-card-${card.id}")) { Text("编辑卡片") }
         }
     }
 }

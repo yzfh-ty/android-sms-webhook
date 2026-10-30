@@ -53,7 +53,10 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
     fun openCard(id: String) { _cardTarget.value = id }
     fun closeCard() { _cardTarget.value = null }
     fun newCard() { _cardEditorError.value = ""; _cardDraft.value = EsimDraft() }
-    fun editCard(view: EsimCardView) { _cardEditorError.value = ""; _cardDraft.value = EsimDraft.from(view) }
+    fun editCard(view: EsimCardView) = action {
+        _cardEditorError.value = ""
+        _cardDraft.value = EsimDraft.from(c.esim.get(view.card.id))
+    }
     fun dismissCardEditor() { _cardDraft.value = null }
     fun saveCard(draft: EsimDraft) = action {
         _cardEditorError.value = ""
