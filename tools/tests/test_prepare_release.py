@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import zipfile
 
 spec = importlib.util.spec_from_file_location("prepare_release", Path(__file__).resolve().parents[1] / "prepare_release.py")
 release = importlib.util.module_from_spec(spec)
@@ -39,37 +40,72 @@ class ReleaseTests(unittest.TestCase):
             with self.subTest(source=source), self.assertRaises(ValueError):
                 release.release_plan(source, {})
 
+    def write_fixture(self, root):
+        output = root / "app/build/outputs/apk/release"
+        output.mkdir(parents=True)
+        metadata = {"applicationId": "com.tyverse.smswebhook", "variantName": "release", "elements": []}
+        for abi in ("arm64-v8a", "x86_64"):
+            filename = f"app-{abi}-release-unsigned.apk"
+            with zipfile.ZipFile(output / filename, "w") as apk:
+                apk.writestr(f"lib/{abi}/fixture.so", b"native fixture")
+            metadata["elements"].append({"outputFile": filename, "versionName": "0.3.2",
+                "filters": [{"filterType": "ABI", "value": abi}]})
+        (output / "output-metadata.json").write_text(json.dumps(metadata))
+        return output, metadata
+
     def package_fixture(self, publish):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
-            for variant in ["debug", "release"]:
-                output = root / "app/build/outputs/apk" / variant
-                output.mkdir(parents=True)
-                filename = "app-debug.apk" if variant == "debug" else "app-release-unsigned.apk"
-                (output / filename).write_bytes(f"fixture-{variant}".encode())
-                (output / "output-metadata.json").write_text(json.dumps({"applicationId": "com.tyverse.smswebhook",
-                    "elements": [{"outputFile": filename, "versionName": "0.3.1"}]}))
-            artifacts = release.package_apks(root, {"publish": publish, "tag": "v0.3.1", "version": "0.3.1"})
+            self.write_fixture(root)
+            artifacts = release.package_apks(root, {"publish": publish, "tag": "v0.3.2", "version": "0.3.2"})
             self.assertEqual(2, len(artifacts))
-            self.assertTrue(artifacts[0].name.endswith("-debug.apk"))
-            self.assertTrue(artifacts[1].name.endswith("release-unsigned.apk"))
+            self.assertEqual(["android-sms-webhook-v0.3.2-arm64-v8a-unsigned.apk",
+                "android-sms-webhook-v0.3.2-x86_64-unsigned.apk"], [path.name for path in artifacts])
             self.assertEqual(2, len((root / "dist/SHA256SUMS.txt").read_text().splitlines()))
 
-    def test_build_only_labels_unsigned_artifacts_and_produces_checksums(self):
+    def test_build_only_packages_two_abis_and_checksums(self):
         self.package_fixture("false")
 
     def test_publishing_requires_no_signing_configuration(self):
         self.package_fixture("true")
 
-    def test_qa_apk_cannot_be_published_as_normal_app(self):
+    def assert_invalid_metadata(self, edit):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
-            output = root / "app/build/outputs/apk/debug"
-            output.mkdir(parents=True)
-            (output / "output-metadata.json").write_text(json.dumps({"applicationId": "com.tyverse.smswebhook.qa",
-                    "elements": [{"outputFile": "app-debug.apk", "versionName": "0.3.1"}]}))
+            output, metadata = self.write_fixture(root)
+            edit(metadata)
+            (output / "output-metadata.json").write_text(json.dumps(metadata))
             with self.assertRaises(ValueError):
-                release.package_apks(root, {"publish": "true", "tag": "v0.3.1", "version": "0.3.1"})
+                release.package_apks(root, {"publish": "true", "tag": "v0.3.2", "version": "0.3.2"})
+
+    def test_qa_apk_cannot_be_published_as_normal_app(self):
+        self.assert_invalid_metadata(lambda m: m.update(applicationId="com.tyverse.smswebhook.qa"))
+
+    def test_debug_variant_cannot_be_published(self):
+        self.assert_invalid_metadata(lambda m: m.update(variantName="debug"))
+
+    def test_missing_or_extra_apks_are_rejected(self):
+        self.assert_invalid_metadata(lambda m: m["elements"].pop())
+        self.assert_invalid_metadata(lambda m: m["elements"].append(m["elements"][0].copy()))
+
+    def test_universal_apk_is_rejected(self):
+        self.assert_invalid_metadata(lambda m: m["elements"][0].update(filters=[]))
+
+    def test_duplicate_abis_are_rejected(self):
+        self.assert_invalid_metadata(lambda m: m["elements"][1].update(filters=[{"filterType": "ABI", "value": "arm64-v8a"}]))
+
+    def test_wrong_version_or_signed_filename_are_rejected(self):
+        self.assert_invalid_metadata(lambda m: m["elements"][0].update(versionName="0.3.1"))
+        self.assert_invalid_metadata(lambda m: m["elements"][0].update(outputFile="app-arm64-v8a-release.apk"))
+
+    def test_mislabeled_native_libraries_are_rejected(self):
+        with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
+            root = Path(directory)
+            output, _ = self.write_fixture(root)
+            with zipfile.ZipFile(output / "app-arm64-v8a-release-unsigned.apk", "w") as apk:
+                apk.writestr("lib/x86_64/fixture.so", b"wrong ABI")
+            with self.assertRaises(ValueError):
+                release.package_apks(root, {"publish": "true", "tag": "v0.3.2", "version": "0.3.2"})
 
 
 if __name__ == "__main__":

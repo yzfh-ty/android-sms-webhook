@@ -1,4 +1,4 @@
-"""Validate release identity and collect Debug and unsigned Release APKs."""
+"""Validate release identity and collect two unsigned, ABI-specific Release APKs."""
 
 import hashlib
 import json
@@ -8,8 +8,10 @@ import re
 import shutil
 import subprocess
 import sys
+import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+RELEASE_ABIS = ("arm64-v8a", "x86_64")
 
 
 def release_plan(source: str, env: dict) -> dict:
@@ -29,28 +31,39 @@ def release_plan(source: str, env: dict) -> dict:
 
 
 def package_apks(root: Path, plan: dict) -> list:
+    directory = root / "app/build/outputs/apk/release"
+    metadata = json.loads((directory / "output-metadata.json").read_text(encoding="utf-8"))
+    if metadata["applicationId"] != "com.tyverse.smswebhook" or metadata["variantName"] != "release":
+        raise ValueError("Expected Release APKs with the normal application ID")
+    elements = metadata["elements"]
+    if len(elements) != len(RELEASE_ABIS):
+        raise ValueError("Expected exactly two APKs: arm64-v8a and x86_64; build with -PsplitApks=true")
+    outputs = {}
+    for element in elements:
+        if element["versionName"] != plan["version"]:
+            raise ValueError("APK version does not match the release tag")
+        filters = element.get("filters", [])
+        if len(filters) != 1 or filters[0].get("filterType") != "ABI":
+            raise ValueError("Expected one ABI filter per APK; universal or other splits are not allowed")
+        abi = filters[0].get("value")
+        if abi not in RELEASE_ABIS or abi in outputs:
+            raise ValueError("Expected one APK for each of arm64-v8a and x86_64")
+        output = Path(element["outputFile"])
+        if str(output) != f"app-{abi}-release-unsigned.apk":
+            raise ValueError("Unexpected output filename; expected an unsigned ABI-specific Release APK")
+        with zipfile.ZipFile(directory / output) as apk:
+            native_abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
+        if native_abis and native_abis != {abi}:
+            raise ValueError(f"APK native libraries do not match {abi}")
+        outputs[abi] = directory / output
     dist = root / "dist"
     dist.mkdir(exist_ok=True)
     if any(dist.iterdir()):
         raise ValueError("dist must be empty; refusing to include artifacts from an earlier build")
     artifacts = []
-    for variant in ["debug", "release"]:
-        directory = root / "app/build/outputs/apk" / variant
-        metadata = json.loads((directory / "output-metadata.json").read_text(encoding="utf-8"))
-        elements = metadata["elements"]
-        if metadata["applicationId"] != "com.tyverse.smswebhook" or len(elements) != 1:
-            raise ValueError("Expected one APK with the normal application ID")
-        element = elements[0]
-        if element["versionName"] != plan["version"]:
-            raise ValueError("APK version does not match the release tag")
-        output = Path(element["outputFile"])
-        if output.name != str(output):
-            raise ValueError("Unexpected APK output path")
-        suffix = "debug" if variant == "debug" else "release-unsigned"
-        if output.name != f"app-{suffix}.apk":
-            raise ValueError(f"Expected app-{suffix}.apk; refusing to mislabel a different build")
-        destination = dist / f"android-sms-webhook-{plan['tag']}-{suffix}.apk"
-        shutil.copyfile(directory / output, destination)
+    for abi in RELEASE_ABIS:
+        destination = dist / f"android-sms-webhook-{plan['tag']}-{abi}-unsigned.apk"
+        shutil.copyfile(outputs[abi], destination)
         artifacts.append(destination)
     (dist / "SHA256SUMS.txt").write_text("".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n" for path in artifacts), encoding="utf-8")
@@ -78,5 +91,5 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
-    except (ValueError, KeyError, OSError, subprocess.CalledProcessError) as error:
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile, subprocess.CalledProcessError) as error:
         sys.exit(str(error))

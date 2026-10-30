@@ -14,8 +14,8 @@ android {
         applicationId = "com.tyverse.smswebhook"
         minSdk = 26
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.3.1"
+        versionCode = 6
+        versionName = "0.3.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -29,6 +29,15 @@ android {
                 enable = true
                 packageScope = setOf("androidx.**", "kotlin.**", "kotlinx.**")
             }
+        }
+    }
+    // CI requests two ABI-specific Release APKs; local Debug/QA builds keep their existing defaults.
+    splits {
+        abi {
+            isEnable = providers.gradleProperty("splitApks").orNull == "true"
+            reset()
+            include("arm64-v8a", "x86_64")
+            isUniversalApk = false
         }
     }
     compileOptions {
