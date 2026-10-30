@@ -42,12 +42,12 @@ class RelayUiTest {
         try {
             server.enqueue(MockResponse().setResponseCode(200).setBody("{\"errcode\":0,\"errmsg\":\"ok\"}"))
             compose.onNodeWithText("设置", useUnmergedTree = true).performClick()
-            compose.waitUntil(10_000) { compose.onAllNodesWithText("企业微信机器人 Webhook").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("机器人地址").fetchSemanticsNodes().isNotEmpty() }
             val model = ViewModelProvider(compose.activity)[RelayViewModel::class.java]
             compose.waitUntil(10_000) { model.feedback.value.ready && !model.feedback.value.busy }
-            compose.onNodeWithText("企业微信机器人 Webhook").performTextReplacement(
+            compose.onNodeWithText("机器人地址").performTextReplacement(
                 server.url("/cgi-bin/webhook/send?key=ui-${UUID.randomUUID()}").toString())
-            compose.onNodeWithText("保存并测试机器人").performScrollTo().performClick()
+            compose.onNodeWithText("保存并测试").performScrollTo().performClick()
             val request = server.takeRequest(30, TimeUnit.SECONDS)
             assertNotNull("The WorkManager test notification did not reach the receiver", request)
             val content = JSONObject(request!!.body.readUtf8()).getJSONObject("text").getString("content")
