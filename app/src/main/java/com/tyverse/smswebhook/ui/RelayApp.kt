@@ -35,7 +35,7 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-private val pageTitles = listOf("概览", "投递记录", "Webhook 设置", "运行诊断")
+private val pageTitles = listOf("概览", "投递记录", "企业微信机器人", "运行诊断")
 private val navTitles = listOf("概览", "记录", "设置", "诊断")
 private val navIcons = listOf(R.drawable.ic_overview, R.drawable.ic_records, R.drawable.ic_settings, R.drawable.ic_health)
 
@@ -108,15 +108,15 @@ private fun Overview(config: RelaySettings, stats: QueueStats, recent: List<Rela
                             Icon(painterResource(R.drawable.ic_sms_notification), null,
                                 Modifier.padding(12.dp), tint = MaterialTheme.colorScheme.onPrimary)
                         }
-                        Text("短信 → WEBHOOK", style = MaterialTheme.typography.labelMedium,
+                        Text("短信 → 企业微信", style = MaterialTheme.typography.labelMedium,
                             fontFamily = FontFamily.Monospace)
                     }
                     Text(when { !permissions.sms && config.enabled -> "需要短信权限"
                         config.enabled -> "短信转发已开启"
                         else -> "准备好，连接你的通知" },
                         style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-                    Text(if (config.enabled) "收到新短信后，先安全保存，再发送到你的 Webhook。"
-                        else "配置一个接收地址，让这台手机成为你的短信通知入口。",
+                    Text(if (config.enabled) "收到新短信后，先安全保存，再发送到企业微信群机器人。"
+                        else "连接企业微信群机器人，让短信通知直接出现在群里。",
                         style = MaterialTheme.typography.bodyMedium)
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween) {
@@ -133,19 +133,19 @@ private fun Overview(config: RelaySettings, stats: QueueStats, recent: List<Rela
         if (!permissions.sms) item { InfoPanel("先授权短信接收", "仅接收新短信，不读取历史收件箱。") {
             Button(onClick = requestSms, enabled = !busy) { Text("授予短信权限") }
         } }
-        if (config.url.isEmpty()) item { InfoPanel("设置你的 Webhook", "保存接收地址后，先发送一条测试通知。") {
-            Button(onClick = settings, enabled = !busy) { Text("配置 Webhook") }
+        if (config.url.isEmpty()) item { InfoPanel("连接企业微信机器人", "粘贴群机器人地址后，先发送一条测试消息。") {
+            Button(onClick = settings, enabled = !busy) { Text("配置机器人") }
         } }
         item { Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Metric("已接受", stats.succeeded, Modifier.weight(1f))
+            Metric("已发送", stats.succeeded, Modifier.weight(1f))
             Metric("待发送", stats.pending, Modifier.weight(1f))
             Metric("需处理", stats.failed, Modifier.weight(1f))
         } }
         if (stats.paused > 0) item { Hint("${stats.paused} 条短信任务已暂停，开启转发后会恢复。") }
         if (config.healthError.isNotEmpty()) item { ErrorPanel(config.healthError) }
         item { Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            SectionTitle("当前接收端")
-            Text(config.url.ifEmpty { "尚未配置" }, style = MaterialTheme.typography.bodyMedium,
+            SectionTitle("企业微信机器人")
+            Text(WebhookProtocol.maskedUrl(config.url), style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text("最近收信  ${formatTime(config.lastReceivedAt)}", style = MaterialTheme.typography.bodySmall)
         } }
@@ -167,14 +167,14 @@ private fun Records(records: List<RelayMessage>, busy: Boolean, detail: (String)
     var confirmClear by remember { mutableStateOf(false) }
     val filtered = records.filter { when (filter) {
         1 -> it.state in listOf(DeliveryState.PENDING, DeliveryState.RETRY_WAIT, DeliveryState.IN_FLIGHT, DeliveryState.PAUSED)
-        2 -> it.state == DeliveryState.SUCCEEDED
+        2 -> it.state == DeliveryState.SUCCEEDED && it.lastBusinessCode == 0
         3 -> it.state == DeliveryState.NEEDS_ATTENTION
         else -> true
     } }
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Hint("显示最近 200 条记录。正文默认隐藏，点开详情查看。已接受表示接收端返回成功。") }
+        item { Hint("显示最近 200 条记录。正文默认隐藏，点开详情查看。已发送表示所有分段都获得企业微信成功确认。") }
         item { FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            listOf("全部", "待发送", "已接受", "需处理").forEachIndexed { i, label ->
+            listOf("全部", "待发送", "已发送", "需处理").forEachIndexed { i, label ->
                 FilterChip(selected = filter == i, onClick = { filter = i }, label = { Text(label) })
             }
         } }
@@ -187,12 +187,12 @@ private fun Records(records: List<RelayMessage>, busy: Boolean, detail: (String)
         if (records.any { it.state == DeliveryState.SUCCEEDED }) item {
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = { confirmClear = true }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                Text("清理已接受记录")
+                Text("清理已发送记录")
             }
         }
     }
     if (confirmClear) AlertDialog(onDismissRequest = { confirmClear = false },
-        title = { Text("清理已接受记录？") }, text = { Text("将删除所有已接受记录及其正文。未完成任务会保留。") },
+        title = { Text("清理已发送记录？") }, text = { Text("将删除所有已发送记录及其正文。未完成任务会保留。") },
         confirmButton = { TextButton(onClick = { confirmClear = false; clear() }) { Text("清理") } },
         dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("取消") } })
 }
@@ -200,35 +200,30 @@ private fun Records(records: List<RelayMessage>, busy: Boolean, detail: (String)
 @Composable
 private fun SettingsPage(draft: EndpointDraft, edit: (EndpointDraft) -> Unit, dirty: Boolean,
     busy: Boolean, save: () -> Unit, test: () -> Unit) {
-    var showToken by rememberSaveable { mutableStateOf(false) }
-    var showSecret by rememberSaveable { mutableStateOf(false) }
+    var showUrl by rememberSaveable { mutableStateOf(false) }
     val urlError = if (dirty) WebhookProtocol.validationError(draft.url.trim(), BuildConfig.DEBUG) else null
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)) {
-        InfoPanel("连接你的接收端", "使用通用 JSON POST 协议。认证与签名为可选项。")
+        InfoPanel("连接企业微信群机器人", "只需粘贴机器人的完整 Webhook 地址，key 已包含在地址中。")
         OutlinedTextField(value = draft.url, onValueChange = { edit(draft.copy(url = it)) },
-            modifier = Modifier.fillMaxWidth(), label = { Text("Webhook 地址") },
-            placeholder = { Text("https://example.com/hooks/sms") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth(), label = { Text("企业微信机器人 Webhook") },
+            placeholder = { Text("https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…") }, singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri), enabled = !busy,
+            visualTransformation = if (showUrl) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = { TextButton(onClick = { showUrl = !showUrl }) { Text(if (showUrl) "隐藏" else "显示") } },
             isError = urlError != null,
-            supportingText = { Text(urlError ?: if (BuildConfig.DEBUG) "调试可用 http://10.0.2.2:8765/hooks/sms" else "使用有效证书的 HTTPS 地址") })
-        SecretField("Bearer Token（可选）", draft.token, showToken, { showToken = !showToken }, !busy) {
-            edit(draft.copy(token = it))
-        }
-        SecretField("HMAC 签名密钥（可选）", draft.secret, showSecret, { showSecret = !showSecret }, !busy) {
-            edit(draft.copy(secret = it))
-        }
-        Hint("正文和认证信息加密保存在本机。修改配置只影响新任务，积压任务继续使用创建时的地址和认证。")
+            supportingText = { Text(urlError ?: "地址包含机器人密钥，默认隐藏并加密保存。") })
+        Hint("修改机器人只影响新任务，积压任务继续使用原机器人。需要迁移时，在任务详情中选择改用当前配置。")
         Button(onClick = save, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) { Text("保存配置") }
         OutlinedButton(onClick = test, enabled = !busy, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp)) {
-            Text("保存并发送测试")
+            Text("保存并测试机器人")
         }
         if (dirty) Text("有尚未保存的修改", color = MaterialTheme.colorScheme.primary,
             style = MaterialTheme.typography.bodySmall)
         HorizontalDivider()
-        SectionTitle("接收端需要做什么")
-        Hint("接收 application/json 请求，以 Idempotency-Key 去重，成功后返回 2xx。发送超时可能触发重试。")
-        Hint("当前版本不内置钉钉或企业微信的消息模板，需使用支持本项目 JSON 协议的接收端。")
+        SectionTitle("在哪里获取机器人地址")
+        Hint("企业微信内部群 → 群机器人 → 添加机器人 → 复制 Webhook。消息包含发送方、接收时间和短信正文，长短信会自动分段。")
+        Hint("机器人不提供客户端幂等保证。网络超时后重试可能出现重复消息，可用通知编号识别。")
         HorizontalDivider()
         SectionTitle("短信过滤规则")
         Hint("留空表示不限制。每行一个条件，同组满足任意一条；发送方与包含关键词两组需同时满足，排除关键词优先。测试通知不受过滤限制。")
@@ -298,13 +293,13 @@ private fun MessageCard(row: RelayMessage, enabled: Boolean, onClick: () -> Unit
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 Text(if (row.source == "test") "测试通知" else maskSender(row.sender),
                     style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                StatusBadge(row.state)
+                StatusBadge(if (row.state == DeliveryState.SUCCEEDED && row.lastBusinessCode == null) "LEGACY_COMPLETED" else row.state)
             }
             Text(formatTime(row.receivedAt), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (row.lastError.isNotEmpty()) Text(row.lastError, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.error, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("尝试 ${row.attempts} 次" + (row.lastHttpStatus?.let { " · HTTP $it" } ?: "") +
+            Text("执行 ${row.attempts} 轮 · 已确认 ${row.nextPartIndex} 段" + (row.lastHttpStatus?.let { " · HTTP $it" } ?: "") +
                 if (row.state == DeliveryState.RETRY_WAIT) " · 下次最早 ${formatTime(row.nextAttemptAt)}" else "",
                 style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -319,7 +314,7 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
     AlertDialog(onDismissRequest = close, title = { Text("通知详情") }, text = {
         Column(Modifier.heightIn(max = 520.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            StatusBadge(row.state)
+            StatusBadge(if (row.state == DeliveryState.SUCCEEDED && row.lastBusinessCode == null) "LEGACY_COMPLETED" else row.state)
             SelectionContainer { Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text("发送方：${row.sender}")
                 Text(detail.body, style = MaterialTheme.typography.bodyLarge)
@@ -327,6 +322,8 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
                 Text("接收：${formatTime(row.receivedAt)}")
                 Text("短信时间：${formatTime(row.smsTimestamp)}")
                 Text("订阅 ID：${row.subscriptionId ?: "未知"}")
+                if (row.state == DeliveryState.SUCCEEDED && row.lastBusinessCode == null)
+                    Text("旧版仅记录 HTTP 接受结果，未验证企业微信业务状态；此记录不计入新版已发送数量。")
                 Text("接收端：${detail.target}")
                 Text("任务 ID：${row.id}", style = MaterialTheme.typography.bodySmall, fontFamily = FontFamily.Monospace)
                 if (row.lastError.isNotEmpty()) Text(row.lastError, color = MaterialTheme.colorScheme.error)
@@ -341,7 +338,7 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
         })
     if (confirmRebind) AlertDialog(onDismissRequest = { confirmRebind = false },
         title = { Text("更改此任务的接收端？") },
-        text = { Text("将使用当前已保存的地址和认证重新发送此条通知：\n$currentUrl\n\n原接收端可能已经处理过该通知。") },
+        text = { Text("将使用当前已保存的机器人重新发送此条通知：\n${WebhookProtocol.maskedUrl(currentUrl)}\n\n原群可能已收到部分消息，更换机器人会重新发送全部分段。") },
         confirmButton = { TextButton(onClick = { confirmRebind = false; close(); retryCurrent(row.id) }) { Text("更改并重试") } },
         dismissButton = { TextButton(onClick = { confirmRebind = false }) { Text("取消") } })
 }
@@ -354,7 +351,8 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
     }
     Surface(color = color, shape = RoundedCornerShape(8.dp)) {
         Text(when (state) {
-            DeliveryState.SUCCEEDED -> "已接受"
+            DeliveryState.SUCCEEDED -> "已发送"
+            "LEGACY_COMPLETED" -> "旧版完成"
             DeliveryState.PENDING -> "待发送"
             DeliveryState.IN_FLIGHT -> "发送中"
             DeliveryState.RETRY_WAIT -> "等待重试"
@@ -404,14 +402,6 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
         Text(value, style = MaterialTheme.typography.labelMedium,
             color = if (good) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant)
     }
-}
-@Composable private fun SecretField(label: String, value: String, show: Boolean, toggle: () -> Unit,
-    enabled: Boolean, change: (String) -> Unit) {
-    OutlinedTextField(value = value, onValueChange = change, label = { Text(label) },
-        modifier = Modifier.fillMaxWidth(), singleLine = true, enabled = enabled,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-        visualTransformation = if (show) VisualTransformation.None else PasswordVisualTransformation(),
-        trailingIcon = { TextButton(onClick = toggle) { Text(if (show) "隐藏" else "显示") } })
 }
 private fun maskSender(sender: String): String = if (sender.length >= 8)
     sender.take(3) + "****" + sender.takeLast(4) else sender

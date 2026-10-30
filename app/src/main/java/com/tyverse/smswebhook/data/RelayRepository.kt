@@ -14,16 +14,17 @@ import com.tyverse.smswebhook.security.CryptoStore
 import com.tyverse.smswebhook.sms.SmsFilter
 import com.tyverse.smswebhook.webhook.EndpointSnapshot
 import com.tyverse.smswebhook.webhook.WebhookProtocol
+import com.tyverse.smswebhook.webhook.WecomMessageFormatter
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
-import java.time.Instant
+import org.json.JSONArray
 import java.util.UUID
 
 class UserInputException(message: String) : IllegalArgumentException(message)
-data class EndpointDraft(val url: String = "", val token: String = "", val secret: String = "",
+data class EndpointDraft(val url: String = "",
     val senderAllowlist: String = "", val includeKeywords: String = "", val excludeKeywords: String = "")
 data class MessageDetail(val message: RelayMessage, val body: String, val target: String)
 
@@ -36,20 +37,14 @@ class RelayRepository(private val context: Context, val database: RelayDatabase,
     suspend fun saveEndpoint(draft: EndpointDraft) = withContext(Dispatchers.IO) {
         val url = draft.url.trim()
         WebhookProtocol.validationError(url, BuildConfig.DEBUG)?.let { throw UserInputException(it) }
-        val token = draft.token.trim()
-        if (token.any { it.code !in 32..126 }) throw UserInputException("Token 只能包含可打印 ASCII 字符，不能包含换行")
         SmsFilter.validationError(draft.senderAllowlist, draft.includeKeywords, draft.excludeKeywords)
             ?.let { throw UserInputException(it) }
-        settings.saveEndpoint(url, if (token.isEmpty()) "" else crypto.encrypt(token),
-            if (draft.secret.isEmpty()) "" else crypto.encrypt(draft.secret),
-            draft.senderAllowlist.trim(), draft.includeKeywords.trim(), draft.excludeKeywords.trim())
+        settings.saveEndpoint(url, draft.senderAllowlist.trim(), draft.includeKeywords.trim(), draft.excludeKeywords.trim())
     }
 
     suspend fun draft(): EndpointDraft = withContext(Dispatchers.IO) {
         val s = settings.current()
-        EndpointDraft(s.url, s.tokenCipher.takeIf { it.isNotEmpty() }?.let(crypto::decrypt) ?: "",
-            s.secretCipher.takeIf { it.isNotEmpty() }?.let(crypto::decrypt) ?: "",
-            s.senderAllowlist, s.includeKeywords, s.excludeKeywords)
+        EndpointDraft(s.url, s.senderAllowlist, s.includeKeywords, s.excludeKeywords)
     }
 
     suspend fun setEnabled(enabled: Boolean) = withContext(Dispatchers.IO) {
@@ -85,18 +80,11 @@ class RelayRepository(private val context: Context, val database: RelayDatabase,
                 }
             }
             WebhookProtocol.validationError(config.url, BuildConfig.DEBUG)?.let { throw UserInputException(it) }
-            val endpoint = EndpointSnapshot(config.url,
-                config.tokenCipher.takeIf(String::isNotEmpty)?.let(crypto::decrypt) ?: "",
-                config.secretCipher.takeIf(String::isNotEmpty)?.let(crypto::decrypt) ?: "")
+            val endpoint = EndpointSnapshot(config.url)
             val id = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
             val source = if (test) "test" else "sms_broadcast"
-            val payload = JSONObject().put("schema_version", 1).put("event_id", id)
-                .put("delivery_id", id).put("device_id", config.deviceId).put("source", source)
-                .put("sender", sender).put("body", body)
-                .put("sms_timestamp", Instant.ofEpochMilli(smsAt).toString())
-                .put("received_at", Instant.ofEpochMilli(now).toString())
-                .put("subscription_id", subscriptionId ?: JSONObject.NULL).toString()
+            val payload = encodePayload(WecomMessageFormatter.format(sender, body, now, subscriptionId, id, test))
             val row = RelayMessage(id, fingerprint, sender, crypto.encrypt(body),
                 crypto.encrypt(payload), crypto.encrypt(endpoint.encode()), now, smsAt, subscriptionId, source)
             val inserted = database.withTransaction {
@@ -136,7 +124,8 @@ class RelayRepository(private val context: Context, val database: RelayDatabase,
                 if (currentEndpoint) {
                     val draft = draft()
                     WebhookProtocol.validationError(draft.url, BuildConfig.DEBUG)?.let { throw UserInputException(it) }
-                    dao.replaceEndpoint(id, crypto.encrypt(EndpointSnapshot(draft.url, draft.token, draft.secret).encode()))
+                    dao.replaceEndpoint(id, crypto.encrypt(EndpointSnapshot(draft.url).encode()),
+                        endpoint(row).url != draft.url)
                 }
                 if (dao.retry(id, System.currentTimeMillis()) == 0) throw UserInputException("此状态不能手动重试")
             }
@@ -147,10 +136,33 @@ class RelayRepository(private val context: Context, val database: RelayDatabase,
     suspend fun detail(id: String): MessageDetail = withContext(Dispatchers.IO) {
         val row = dao.get(id) ?: throw UserInputException("记录不存在")
         MessageDetail(row, if (row.bodyCipher.isEmpty()) "正文已按保留策略清理" else crypto.decrypt(row.bodyCipher),
-            if (row.endpointCipher.isEmpty()) "目标信息已清理" else EndpointSnapshot.decode(crypto.decrypt(row.endpointCipher)).url)
+            if (row.endpointCipher.isEmpty()) "目标信息已清理" else WebhookProtocol.maskedUrl(EndpointSnapshot.decode(crypto.decrypt(row.endpointCipher)).url))
     }
 
-    fun payload(row: RelayMessage): String = crypto.decrypt(row.payloadCipher)
+    private fun encodePayload(contents: List<String>): String {
+        val messages = JSONArray()
+        contents.forEach { messages.put(JSONObject().put("msgtype", "text").put("text", JSONObject().put("content", it))) }
+        return JSONObject().put("protocol", "wecom-text-v1").put("messages", messages).toString()
+    }
+
+    suspend fun payloads(row: RelayMessage): List<String> {
+        var json = JSONObject(crypto.decrypt(row.payloadCipher))
+        if (json.optString("protocol") != "wecom-text-v1") {
+            // Preserve queued 0.1 messages; convert the generic payload once without resending completed messages.
+            val updated = encodePayload(WecomMessageFormatter.format(row.sender, crypto.decrypt(row.bodyCipher),
+                row.receivedAt, row.subscriptionId, row.id, row.source == "test"))
+            dao.upgradePayload(row.id, row.payloadCipher, crypto.encrypt(updated))
+            json = JSONObject(updated)
+        }
+        val parts = json.getJSONArray("messages")
+        require(parts.length() in 1..999)
+        return (0 until parts.length()).map { index ->
+            val message = parts.getJSONObject(index)
+            require(message.getString("msgtype") == "text")
+            require(message.getJSONObject("text").getString("content").toByteArray(Charsets.UTF_8).size <= WebhookProtocol.MAX_CONTENT_BYTES)
+            message.toString()
+        }
+    }
     fun endpoint(row: RelayMessage): EndpointSnapshot = EndpointSnapshot.decode(crypto.decrypt(row.endpointCipher))
     fun bootCount(): Int = Settings.Global.getInt(context.contentResolver, Settings.Global.BOOT_COUNT, 0)
 }

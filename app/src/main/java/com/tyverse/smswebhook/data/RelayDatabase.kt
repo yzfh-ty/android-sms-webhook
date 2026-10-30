@@ -9,6 +9,9 @@ import androidx.room.OnConflictStrategy
 import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.RoomDatabase
+import androidx.room.ColumnInfo
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
 
 object DeliveryState {
@@ -44,6 +47,8 @@ data class RelayMessage(
     val lastAttemptAt: Long = 0,
     val lastHttpStatus: Int? = null,
     val lastError: String = "",
+    @ColumnInfo(defaultValue = "0") val nextPartIndex: Int = 0,
+    val lastBusinessCode: Int? = null,
 )
 
 data class QueueStats(val total: Int = 0, val succeeded: Int = 0, val pending: Int = 0,
@@ -59,7 +64,7 @@ interface MessageDao {
     fun observeRecent(): Flow<List<RelayMessage>>
 
     @Query("""SELECT COUNT(*) AS total,
-        COALESCE(SUM(state = 'SUCCEEDED'), 0) AS succeeded,
+        COALESCE(SUM(state = 'SUCCEEDED' AND lastBusinessCode = 0), 0) AS succeeded,
         COALESCE(SUM(state IN ('PENDING','RETRY_WAIT','IN_FLIGHT')), 0) AS pending,
         COALESCE(SUM(state = 'NEEDS_ATTENTION'), 0) AS failed,
         COALESCE(SUM(state = 'PAUSED'), 0) AS paused FROM messages""")
@@ -90,6 +95,19 @@ interface MessageDao {
     suspend fun finish(id: String, token: String, state: String, httpStatus: Int?,
         error: String, nextAt: Long): Int
 
+    @Query("""UPDATE messages SET nextPartIndex=:nextPart, lastHttpStatus=200, lastBusinessCode=0,
+        leaseUntil=:until, leaseElapsedUntil=:elapsedUntil
+        WHERE id=:id AND state='IN_FLIGHT' AND leaseToken=:token AND nextPartIndex=:expectedPart""")
+    suspend fun acknowledgePart(id: String, token: String, expectedPart: Int, nextPart: Int,
+        until: Long, elapsedUntil: Long): Int
+
+    @Query("""UPDATE messages SET lastBusinessCode=:code
+        WHERE id=:id AND state='IN_FLIGHT' AND leaseToken=:token""")
+    suspend fun setBusinessCode(id: String, token: String, code: Int?): Int
+
+    @Query("UPDATE messages SET payloadCipher=:updated WHERE id=:id AND payloadCipher=:expected")
+    suspend fun upgradePayload(id: String, expected: String, updated: String): Int
+
     @Query("""UPDATE messages SET state='RETRY_WAIT', leaseToken=NULL, leaseUntil=0,
         leaseElapsedUntil=0, nextAttemptAt=:now, lastError='上次执行中断，等待恢复'
         WHERE state='IN_FLIGHT' AND (leaseUntil<=:now OR leaseUntil>:maxUntil
@@ -104,13 +122,14 @@ interface MessageDao {
     suspend fun resumeSms(): Int
 
     @Query("""UPDATE messages SET state='PENDING', attempts=0, nextAttemptAt=0,
-        retryWindowStartedAt=:now, lastError='', lastHttpStatus=NULL
+        retryWindowStartedAt=:now, lastError='', lastHttpStatus=NULL, lastBusinessCode=NULL
         WHERE id=:id AND state IN ('NEEDS_ATTENTION','RETRY_WAIT')""")
     suspend fun retry(id: String, now: Long): Int
 
-    @Query("""UPDATE messages SET endpointCipher=:endpointCipher WHERE id=:id
+    @Query("""UPDATE messages SET endpointCipher=:endpointCipher,
+        nextPartIndex=CASE WHEN :resetProgress THEN 0 ELSE nextPartIndex END WHERE id=:id
         AND state IN ('NEEDS_ATTENTION','RETRY_WAIT')""")
-    suspend fun replaceEndpoint(id: String, endpointCipher: String): Int
+    suspend fun replaceEndpoint(id: String, endpointCipher: String, resetProgress: Boolean): Int
 
     @Query("""UPDATE messages SET state='NEEDS_ATTENTION', lastError='自动投递期限已到，请手动处理'
         WHERE state IN ('PENDING','RETRY_WAIT') AND retryWindowStartedAt<=:before""")
@@ -127,7 +146,15 @@ interface MessageDao {
     suspend fun clearCompleted(): Int
 }
 
-@Database(entities = [RelayMessage::class], version = 1, exportSchema = true)
+@Database(entities = [RelayMessage::class], version = 2, exportSchema = true)
 abstract class RelayDatabase : RoomDatabase() {
     abstract fun messages(): MessageDao
+    companion object {
+        val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN nextPartIndex INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE messages ADD COLUMN lastBusinessCode INTEGER")
+            }
+        }
+    }
 }

@@ -11,6 +11,7 @@ import com.tyverse.smswebhook.webhook.EndpointSnapshot
 import com.tyverse.smswebhook.webhook.WebhookClient
 import com.tyverse.smswebhook.webhook.WebhookProtocol
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.first
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -20,6 +21,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
+import org.json.JSONObject
 
 @RunWith(AndroidJUnit4::class)
 class RelayCoreTest {
@@ -84,6 +86,11 @@ class RelayCoreTest {
         assertEquals(1, db.messages().deleteOldCompleted(2_000))
         assertNotNull(db.messages().get("one"))
     }
+    @Test fun oldHttpOnlySuccessIsNotCountedAsConfirmedWecomDelivery() = runBlocking {
+        db.messages().insert(message().copy(state = DeliveryState.SUCCEEDED))
+        db.messages().insert(message("two", "second").copy(state = DeliveryState.SUCCEEDED, lastBusinessCode = 0))
+        assertEquals(1, db.messages().observeStats().first().succeeded)
+    }
     @Test fun encryptedMessagesRoundTripWithRandomNonces() {
         val crypto = CryptoStore()
         val first = crypto.encrypt("正文 123456\n第二行")
@@ -92,20 +99,20 @@ class RelayCoreTest {
         assertFalse(first.contains("123456"))
         assertEquals("正文 123456\n第二行", crypto.decrypt(first))
     }
-    @Test fun webhookSendsStableIdAuthenticationAndExactSignature() = runBlocking {
+    @Test fun webhookSendsOnlyTheWecomTextContract() = runBlocking {
         val server = MockWebServer()
         server.start(InetAddress.getByName("127.0.0.1"), 0)
         try {
-            server.enqueue(MockResponse().setResponseCode(202))
-            val payload = "{\"body\":\"中文换行\\n测试\"}"
-            val result = WebhookClient().send(EndpointSnapshot(server.url("/hooks/sms").toString(), "test-token", "test-secret"), payload, "delivery-one")
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"errcode\":0,\"errmsg\":\"ok\"}"))
+            val payload = "{\"msgtype\":\"text\",\"text\":{\"content\":\"中文换行\\n测试\"}}"
+            val result = WebhookClient().send(EndpointSnapshot(server.url("/cgi-bin/webhook/send?key=test-key").toString()), payload)
             assertTrue(result.success)
             val request = server.takeRequest(5, TimeUnit.SECONDS)!!
             assertEquals(payload, request.body.readUtf8())
-            assertEquals("delivery-one", request.getHeader("Idempotency-Key"))
-            assertEquals("Bearer test-token", request.getHeader("Authorization"))
-            val timestamp = request.getHeader("X-SMS-Timestamp")!!
-            assertEquals("v1=${WebhookProtocol.signature("test-secret", timestamp, payload)}", request.getHeader("X-SMS-Signature"))
+            assertEquals(0, result.businessCode)
+            assertNull(request.getHeader("Idempotency-Key")); assertNull(request.getHeader("Authorization"))
+            assertNull(request.getHeader("X-SMS-Signature"))
+            assertEquals("test-key", request.requestUrl!!.queryParameter("key"))
         } finally { server.shutdown() }
     }
     @Test fun redirectDoesNotForwardSensitiveRequest() = runBlocking {
@@ -113,7 +120,7 @@ class RelayCoreTest {
         server.start(InetAddress.getByName("127.0.0.1"), 0)
         try {
             server.enqueue(MockResponse().setResponseCode(302).addHeader("Location", server.url("/other")))
-            val result = WebhookClient().send(EndpointSnapshot(server.url("/hooks/sms").toString(), "", ""), "{}", "redirect-test")
+            val result = WebhookClient().send(EndpointSnapshot(server.url("/cgi-bin/webhook/send?key=test-key").toString()), "{}")
             assertFalse(result.success)
             assertFalse(result.retryable)
             assertEquals(1, server.requestCount)
@@ -125,7 +132,7 @@ class RelayCoreTest {
         try {
             server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "120"))
             val before = System.currentTimeMillis()
-            val result = WebhookClient().send(EndpointSnapshot(server.url("/hooks/sms").toString(), "", ""), "{}", "rate-limit")
+            val result = WebhookClient().send(EndpointSnapshot(server.url("/cgi-bin/webhook/send?key=test-key").toString()), "{}")
             assertTrue(result.retryable)
             assertTrue(result.retryAfterAt!! >= before + 120_000)
         } finally { server.shutdown() }

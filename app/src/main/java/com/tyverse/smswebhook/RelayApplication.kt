@@ -17,8 +17,9 @@ import kotlinx.coroutines.launch
 class AppContainer(val app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val crypto = CryptoStore()
-    val settings = SettingsStore(app)
-    val database = Room.databaseBuilder(app, RelayDatabase::class.java, "relay.db").build()
+    val settings = SettingsStore(app, crypto)
+    val database = Room.databaseBuilder(app, RelayDatabase::class.java, "relay.db")
+        .addMigrations(RelayDatabase.MIGRATION_1_2).build()
     val scheduler by lazy { DeliveryScheduler(app) }
     val repository by lazy { RelayRepository(app, database, settings, crypto, scheduler) }
     val http = WebhookClient()

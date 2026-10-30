@@ -14,12 +14,25 @@ import org.junit.Assert.*
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.rules.ExternalResource
+import android.os.ParcelFileDescriptor
 import java.net.InetAddress
 import java.util.concurrent.TimeUnit
+import java.util.UUID
+import org.json.JSONObject
+import kotlinx.coroutines.flow.first
 
 @RunWith(AndroidJUnit4::class)
 class RelayUiTest {
-    @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    @get:Rule(order = 0) val awakeDevice = object : ExternalResource() {
+        override fun before() {
+            val automation = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().uiAutomation
+            listOf("input keyevent KEYCODE_WAKEUP", "wm dismiss-keyguard").forEach { command ->
+                ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand(command)).use { it.readBytes() }
+            }
+        }
+    }
+    @get:Rule(order = 1) val compose = createAndroidComposeRule<MainActivity>()
 
     @Test fun settingsTestButtonPersistsAndDeliversNotification() {
         val server = MockWebServer()
@@ -27,23 +40,28 @@ class RelayUiTest {
         val c = (compose.activity.application as RelayApplication).container
         val saved = runBlocking { c.repository.draft() }
         try {
-            server.enqueue(MockResponse().setResponseCode(200))
+            server.enqueue(MockResponse().setResponseCode(200).setBody("{\"errcode\":0,\"errmsg\":\"ok\"}"))
             compose.onNodeWithText("设置", useUnmergedTree = true).performClick()
-            compose.waitUntil(10_000) { compose.onAllNodesWithText("Webhook 地址").fetchSemanticsNodes().isNotEmpty() }
+            compose.waitUntil(10_000) { compose.onAllNodesWithText("企业微信机器人 Webhook").fetchSemanticsNodes().isNotEmpty() }
             val model = ViewModelProvider(compose.activity)[RelayViewModel::class.java]
             compose.waitUntil(10_000) { model.feedback.value.ready && !model.feedback.value.busy }
-            compose.onNodeWithText("Webhook 地址").performTextReplacement(server.url("/hooks/sms").toString())
-            compose.onNodeWithText("保存并发送测试").performScrollTo().performClick()
+            compose.onNodeWithText("企业微信机器人 Webhook").performTextReplacement(
+                server.url("/cgi-bin/webhook/send?key=ui-${UUID.randomUUID()}").toString())
+            compose.onNodeWithText("保存并测试机器人").performScrollTo().performClick()
             val request = server.takeRequest(30, TimeUnit.SECONDS)
             assertNotNull("The WorkManager test notification did not reach the receiver", request)
-            val id = request!!.getHeader("Idempotency-Key")!!
-            compose.waitUntil(10_000) { runBlocking { c.repository.dao.get(id)?.state == DeliveryState.SUCCEEDED } }
+            val content = JSONObject(request!!.body.readUtf8()).getJSONObject("text").getString("content")
+            assertTrue(content.startsWith("【测试通知】"))
+            val prefix = content.lineSequence().first { it.startsWith("编号：") }.substringAfter("编号：")
+            compose.waitUntil(10_000) { runBlocking {
+                c.repository.dao.observeRecent().first().firstOrNull { it.id.startsWith(prefix) }?.state == DeliveryState.SUCCEEDED
+            } }
             compose.onNodeWithText("记录", useUnmergedTree = true).performClick()
             compose.onAllNodesWithText("测试通知").onFirst().assertExists()
         } finally {
             runBlocking {
-                if (saved.url.isNotEmpty()) c.repository.saveEndpoint(saved)
-                else c.settings.saveEndpoint("", "", "")
+                if (saved.url.isNotEmpty()) c.settings.saveEndpoint(saved.url, saved.senderAllowlist, saved.includeKeywords, saved.excludeKeywords)
+                else c.settings.saveEndpoint("")
             }
             server.shutdown()
         }

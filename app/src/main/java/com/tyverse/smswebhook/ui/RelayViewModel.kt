@@ -70,26 +70,26 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
             c.root.isExempt())
     }
     fun save() = action {
-        c.repository.saveEndpoint(_draft.value); _dirty.value = false; notify("Webhook 配置已保存")
+        c.repository.saveEndpoint(_draft.value); _dirty.value = false; notify("机器人配置已保存")
     }
     fun test() = action {
         c.repository.saveEndpoint(_draft.value); _dirty.value = false
         c.repository.sendTest(); notify("测试通知已入队，请在记录中查看结果")
     }
     fun toggle(enabled: Boolean) = action {
-        if (enabled && _dirty.value) throw UserInputException("请先保存 Webhook 配置")
+        if (enabled && _dirty.value) throw UserInputException("请先保存机器人地址和过滤规则")
         c.repository.setEnabled(enabled)
         notify(if (enabled) "已开启短信转发，暂停任务会继续发送" else "已暂停转发，未完成短信任务已保留")
     }
     fun retry(id: String) = action { c.repository.retry(id); notify("已安排重试") }
     fun retryWithCurrentEndpoint(id: String) = action {
-        if (_dirty.value) throw UserInputException("请先保存新的 Webhook 配置")
+        if (_dirty.value) throw UserInputException("请先保存新的机器人配置")
         c.repository.retry(id, currentEndpoint = true); notify("已使用当前已保存配置安排重试")
     }
     fun showDetail(id: String) = action { _detail.value = c.repository.detail(id) }
     fun recover() = action { c.repository.recover(); notify("队列检查完成，执行时间仍由系统调度") }
     fun clearCompleted() = action {
-        val count = c.repository.dao.clearCompleted(); notify("已清理 $count 条已接受记录")
+        val count = c.repository.dao.clearCompleted(); notify("已清理 $count 条已发送记录")
     }
     fun checkRoot() = action { _root.value = c.root.check(); refreshPermissions() }
     fun addWhitelist() = action { _root.value = c.root.addWhitelist(); refreshPermissions() }
