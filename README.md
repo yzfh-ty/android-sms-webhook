@@ -4,7 +4,7 @@ Kotlin 原生 Android 短信通知与 eSIM 到期管理工具。短信通过**�
 
 ## 当前功能
 
-0.3.2 开发版，目标设备为 Android 16：
+0.3.3 开发版，目标设备为 Android 16：
 
 - 只需粘贴完整机器人 Webhook；地址中的 key 加密保存，默认隐藏。
 - 短信先加密落盘，再由 WorkManager 投递，支持过滤、去重和断网恢复。
@@ -50,9 +50,9 @@ SDK 配置：`minSdk = 26`、`compileSdk = 37`、`targetSdk = 36`。AGP 9.5.0，
 .\gradlew.bat assembleDebug
 ```
 
-按发布配置构建：`.\gradlew.bat -PsplitApks=true assembleRelease`。输出 ARM64（`arm64-v8a`）和 x86_64 两份未签名 Release APK，不生成通用包。日常本地 Debug / QA 构建仍使用原来的开发配置。
+按发布配置构建：`.\gradlew.bat --no-configuration-cache -PsplitApks=true assembleRelease`。输出 ARM64（`arm64-v8a`）和 x86_64 两份自动签名的 Release APK，不生成通用包。日常本地 Debug / QA 构建仍使用原来的开发配置。
 
-GitHub Actions 支持手动构建/发布，以及推送 `v*` 标签自动创建 GitHub Release。每个版本只发布上述两个架构的未签名 Release APK 和校验和，不附带 Debug 或通用 APK，也不需要签名 Secrets。具体步骤见 [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)。
+GitHub Actions 支持手动构建/发布，以及推送 `v*` 标签自动创建 GitHub Release。每个版本只发布上述两个架构的可安装 Release APK 和校验和，不附带 Debug 或通用 APK。签名使用已配置的固定专用密钥，流水线自动处理，无需手动填写签名参数。具体步骤见 [GitHub Actions 构建与发布](docs/GitHubActions构建与发布.md)。
 
 本机企业微信模拟接口，只监听 127.0.0.1，不向真实群发送消息：
 

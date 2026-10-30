@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_release:
-        description: Publish unsigned ARM64 and x86_64 Release APKs
+        description: Publish installable ARM64 and x86_64 Release APKs
         type: boolean
         default: true
       tag:
@@ -62,8 +62,16 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
+      - name: Prepare managed release signing
+        env:
+          ANDROID_RELEASE_SIGNING: ${{ secrets.ANDROID_RELEASE_SIGNING }}
+        run: python3 tools/release_signing.py prepare
+
       - name: Test, lint and build APKs
         run: bash ./gradlew --no-daemon --no-configuration-cache -PsplitApks=true testDebugUnitTest lintDebug assembleRelease
+
+      - name: Verify APK signatures and stable signing identity
+        run: python3 tools/release_signing.py verify
 
       - name: Collect APKs and checksums
         run: python3 tools/prepare_release.py --package
@@ -86,6 +94,10 @@ jobs:
             app/build/reports/lint-results-debug.*
           if-no-files-found: ignore
           retention-days: 14
+
+      - name: Remove temporary signing material
+        if: always()
+        run: rm -f -- "$RUNNER_TEMP/android-release.p12"
 
   release:
     needs: build
@@ -116,4 +128,4 @@ jobs:
           if [[ "$PRERELEASE" == "true" ]]; then flags+=(--prerelease); fi
           gh release create "$RELEASE_TAG" dist/* --target "$RELEASE_COMMIT" \
             --title "$RELEASE_TAG" --generate-notes \
-            --notes 'Unsigned Release APKs for arm64-v8a and x86_64 only. No Debug or universal APK is included.' "${flags[@]}"
+            --notes 'Installable Release APKs for arm64-v8a and x86_64, automatically signed with the pinned application certificate.' "${flags[@]}"

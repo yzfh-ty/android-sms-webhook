@@ -1,4 +1,4 @@
-"""Validate release identity and collect two unsigned, ABI-specific Release APKs."""
+"""Validate release identity and collect two signed, ABI-specific Release APKs."""
 
 import hashlib
 import json
@@ -49,8 +49,8 @@ def package_apks(root: Path, plan: dict) -> list:
         if abi not in RELEASE_ABIS or abi in outputs:
             raise ValueError("Expected one APK for each of arm64-v8a and x86_64")
         output = Path(element["outputFile"])
-        if str(output) != f"app-{abi}-release-unsigned.apk":
-            raise ValueError("Unexpected output filename; expected an unsigned ABI-specific Release APK")
+        if str(output) != f"app-{abi}-release.apk":
+            raise ValueError("Unexpected output filename; expected a signed ABI-specific Release APK")
         with zipfile.ZipFile(directory / output) as apk:
             native_abis = {name.split("/")[1] for name in apk.namelist() if name.startswith("lib/") and name.endswith(".so")}
         if native_abis and native_abis != {abi}:
@@ -62,7 +62,7 @@ def package_apks(root: Path, plan: dict) -> list:
         raise ValueError("dist must be empty; refusing to include artifacts from an earlier build")
     artifacts = []
     for abi in RELEASE_ABIS:
-        destination = dist / f"android-sms-webhook-{plan['tag']}-{abi}-unsigned.apk"
+        destination = dist / f"android-sms-webhook-{plan['tag']}-{abi}.apk"
         shutil.copyfile(outputs[abi], destination)
         artifacts.append(destination)
     (dist / "SHA256SUMS.txt").write_text("".join(

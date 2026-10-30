@@ -45,10 +45,10 @@ class ReleaseTests(unittest.TestCase):
         output.mkdir(parents=True)
         metadata = {"applicationId": "com.tyverse.smswebhook", "variantName": "release", "elements": []}
         for abi in ("arm64-v8a", "x86_64"):
-            filename = f"app-{abi}-release-unsigned.apk"
+            filename = f"app-{abi}-release.apk"
             with zipfile.ZipFile(output / filename, "w") as apk:
                 apk.writestr(f"lib/{abi}/fixture.so", b"native fixture")
-            metadata["elements"].append({"outputFile": filename, "versionName": "0.3.2",
+            metadata["elements"].append({"outputFile": filename, "versionName": "0.3.3",
                 "filters": [{"filterType": "ABI", "value": abi}]})
         (output / "output-metadata.json").write_text(json.dumps(metadata))
         return output, metadata
@@ -57,16 +57,16 @@ class ReleaseTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
             self.write_fixture(root)
-            artifacts = release.package_apks(root, {"publish": publish, "tag": "v0.3.2", "version": "0.3.2"})
+            artifacts = release.package_apks(root, {"publish": publish, "tag": "v0.3.3", "version": "0.3.3"})
             self.assertEqual(2, len(artifacts))
-            self.assertEqual(["android-sms-webhook-v0.3.2-arm64-v8a-unsigned.apk",
-                "android-sms-webhook-v0.3.2-x86_64-unsigned.apk"], [path.name for path in artifacts])
+            self.assertEqual(["android-sms-webhook-v0.3.3-arm64-v8a.apk",
+                "android-sms-webhook-v0.3.3-x86_64.apk"], [path.name for path in artifacts])
             self.assertEqual(2, len((root / "dist/SHA256SUMS.txt").read_text().splitlines()))
 
     def test_build_only_packages_two_abis_and_checksums(self):
         self.package_fixture("false")
 
-    def test_publishing_requires_no_signing_configuration(self):
+    def test_publishing_packages_signed_release_filenames(self):
         self.package_fixture("true")
 
     def assert_invalid_metadata(self, edit):
@@ -76,7 +76,7 @@ class ReleaseTests(unittest.TestCase):
             edit(metadata)
             (output / "output-metadata.json").write_text(json.dumps(metadata))
             with self.assertRaises(ValueError):
-                release.package_apks(root, {"publish": "true", "tag": "v0.3.2", "version": "0.3.2"})
+                release.package_apks(root, {"publish": "true", "tag": "v0.3.3", "version": "0.3.3"})
 
     def test_qa_apk_cannot_be_published_as_normal_app(self):
         self.assert_invalid_metadata(lambda m: m.update(applicationId="com.tyverse.smswebhook.qa"))
@@ -94,18 +94,18 @@ class ReleaseTests(unittest.TestCase):
     def test_duplicate_abis_are_rejected(self):
         self.assert_invalid_metadata(lambda m: m["elements"][1].update(filters=[{"filterType": "ABI", "value": "arm64-v8a"}]))
 
-    def test_wrong_version_or_signed_filename_are_rejected(self):
+    def test_wrong_version_or_unsigned_filename_are_rejected(self):
         self.assert_invalid_metadata(lambda m: m["elements"][0].update(versionName="0.3.1"))
-        self.assert_invalid_metadata(lambda m: m["elements"][0].update(outputFile="app-arm64-v8a-release.apk"))
+        self.assert_invalid_metadata(lambda m: m["elements"][0].update(outputFile="app-arm64-v8a-release-unsigned.apk"))
 
     def test_mislabeled_native_libraries_are_rejected(self):
         with tempfile.TemporaryDirectory(dir=self.temporary_root) as directory:
             root = Path(directory)
             output, _ = self.write_fixture(root)
-            with zipfile.ZipFile(output / "app-arm64-v8a-release-unsigned.apk", "w") as apk:
+            with zipfile.ZipFile(output / "app-arm64-v8a-release.apk", "w") as apk:
                 apk.writestr("lib/x86_64/fixture.so", b"wrong ABI")
             with self.assertRaises(ValueError):
-                release.package_apks(root, {"publish": "true", "tag": "v0.3.2", "version": "0.3.2"})
+                release.package_apks(root, {"publish": "true", "tag": "v0.3.3", "version": "0.3.3"})
 
 
 if __name__ == "__main__":

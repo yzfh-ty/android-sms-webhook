@@ -14,4 +14,5 @@
 # WorkManager persists worker class names across process restarts and app upgrades.
 -keep class com.tyverse.smswebhook.delivery.WebhookWorker { public <init>(android.content.Context, androidx.work.WorkerParameters); }
 -keep class com.tyverse.smswebhook.delivery.RecoveryWorker { public <init>(android.content.Context, androidx.work.WorkerParameters); }
+-keep class com.tyverse.smswebhook.esim.EsimReminderWorker { public <init>(android.content.Context, androidx.work.WorkerParameters); }
 -keep class com.tyverse.smswebhook.ui.RelayViewModel { public <init>(android.app.Application); }
