@@ -23,7 +23,11 @@ class DeliveryScheduler(context: Context) {
             .setInputData(workDataOf("message_id" to message.id))
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 30, TimeUnit.SECONDS)
-            .addTag(if (message.source == "test") "test-delivery" else "sms-delivery")
+            .addTag(when (message.source) {
+                "test" -> "test-delivery"
+                "esim_reminder" -> "esim-delivery"
+                else -> "sms-delivery"
+            })
         if (delay > 0) builder.setInitialDelay(delay, TimeUnit.MILLISECONDS)
         else if (Build.VERSION.SDK_INT >= 31) builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         manager.enqueueUniqueWork("delivery-${message.id}",
@@ -34,4 +38,5 @@ class DeliveryScheduler(context: Context) {
             PeriodicWorkRequestBuilder<RecoveryWorker>(15, TimeUnit.MINUTES).build())
     }
     fun cancelSms() { manager.cancelAllWorkByTag("sms-delivery").result.get(10, TimeUnit.SECONDS) }
+    fun cancel(id: String) { manager.cancelUniqueWork("delivery-$id") }
 }

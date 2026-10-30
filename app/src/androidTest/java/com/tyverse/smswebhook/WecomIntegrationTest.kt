@@ -62,11 +62,13 @@ class WecomIntegrationTest {
         } finally { server.shutdown() }
     }
 
-    @Test fun databaseUpgradePreservesVersionOneMessages() = runBlocking {
+    @Test fun databaseUpgradePreservesVersionOneMessages() = migrateFrom(1)
+    @Test fun databaseUpgradePreservesVersionTwoMessages() = migrateFrom(2)
+    private fun migrateFrom(version: Int) = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
         val context = instrumentation.targetContext
         val name = "migration-${UUID.randomUUID()}.db"
-        val schema = instrumentation.context.assets.open("com.tyverse.smswebhook.data.RelayDatabase/1.json")
+        val schema = instrumentation.context.assets.open("com.tyverse.smswebhook.data.RelayDatabase/$version.json")
             .bufferedReader().use { JSONObject(it.readText()).getJSONObject("database") }
         context.openOrCreateDatabase(name, 0, null).use { legacy ->
             val entities = schema.getJSONArray("entities")
@@ -87,17 +89,20 @@ class WecomIntegrationTest {
                 put("attempts", 0); put("nextAttemptAt", 0L); putNull("leaseToken"); put("leaseUntil", 0L)
                 put("leaseElapsedUntil", 0L); put("leaseBoot", 0); put("lastAttemptAt", 0L)
                 putNull("lastHttpStatus"); put("lastError", "")
+                if (version >= 2) { put("nextPartIndex", 1); putNull("lastBusinessCode") }
             }
             legacy.insertOrThrow("messages", null, values)
-            legacy.version = 1
+            legacy.version = version
         }
         val upgraded = Room.databaseBuilder(context, RelayDatabase::class.java, name)
-            .addMigrations(RelayDatabase.MIGRATION_1_2).build()
+            .addMigrations(RelayDatabase.MIGRATION_1_2, RelayDatabase.MIGRATION_2_3).build()
         try {
             val row = upgraded.messages().get("legacy-id")!!
             assertEquals("encrypted-body", row.bodyCipher)
-            assertEquals(0, row.nextPartIndex); assertNull(row.lastBusinessCode)
-            assertEquals(2, upgraded.openHelper.writableDatabase.version)
+            assertEquals(if (version == 1) 0 else 1, row.nextPartIndex); assertNull(row.lastBusinessCode)
+            assertNull(row.cardId); assertNull(row.cardRuleVersion)
+            assertTrue(upgraded.cards().all().isEmpty())
+            assertEquals(3, upgraded.openHelper.writableDatabase.version)
         } finally { upgraded.close(); context.deleteDatabase(name) }
     }
 }

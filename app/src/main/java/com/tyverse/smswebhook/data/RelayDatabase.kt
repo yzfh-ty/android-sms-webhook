@@ -13,6 +13,9 @@ import androidx.room.ColumnInfo
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import kotlinx.coroutines.flow.Flow
+import com.tyverse.smswebhook.esim.EsimCard
+import com.tyverse.smswebhook.esim.EsimDao
+import com.tyverse.smswebhook.esim.EsimReminderEvent
 
 object DeliveryState {
     const val PENDING = "PENDING"
@@ -21,6 +24,7 @@ object DeliveryState {
     const val SUCCEEDED = "SUCCEEDED"
     const val NEEDS_ATTENTION = "NEEDS_ATTENTION"
     const val PAUSED = "PAUSED"
+    const val CANCELLED = "CANCELLED"
 }
 
 @Entity(tableName = "messages", indices = [Index(value = ["fingerprint"], unique = true),
@@ -49,6 +53,8 @@ data class RelayMessage(
     val lastError: String = "",
     @ColumnInfo(defaultValue = "0") val nextPartIndex: Int = 0,
     val lastBusinessCode: Int? = null,
+    val cardId: String? = null,
+    val cardRuleVersion: Long? = null,
 )
 
 data class QueueStats(val total: Int = 0, val succeeded: Int = 0, val pending: Int = 0,
@@ -76,7 +82,7 @@ interface MessageDao {
     @Query("SELECT id FROM messages WHERE fingerprint = :fingerprint LIMIT 1")
     suspend fun findFingerprint(fingerprint: String): String?
 
-    @Query("SELECT COUNT(*) FROM messages WHERE state != 'SUCCEEDED'")
+    @Query("SELECT COUNT(*) FROM messages WHERE state NOT IN ('SUCCEEDED','CANCELLED')")
     suspend fun outstandingCount(): Int
 
     @Query("SELECT id, nextAttemptAt, source FROM messages WHERE state IN ('PENDING','RETRY_WAIT')")
@@ -115,10 +121,10 @@ interface MessageDao {
     suspend fun recoverLeases(now: Long, maxUntil: Long, elapsed: Long, boot: Int): Int
 
     @Query("""UPDATE messages SET state='PAUSED', leaseToken=NULL, leaseUntil=0,
-        leaseElapsedUntil=0 WHERE source!='test' AND state IN ('PENDING','RETRY_WAIT','IN_FLIGHT')""")
+        leaseElapsedUntil=0 WHERE source='sms_broadcast' AND state IN ('PENDING','RETRY_WAIT','IN_FLIGHT')""")
     suspend fun pauseSms(): Int
 
-    @Query("UPDATE messages SET state='PENDING', nextAttemptAt=0 WHERE state='PAUSED'")
+    @Query("UPDATE messages SET state='PENDING', nextAttemptAt=0 WHERE state='PAUSED' AND source='sms_broadcast'")
     suspend fun resumeSms(): Int
 
     @Query("""UPDATE messages SET state='PENDING', attempts=0, nextAttemptAt=0,
@@ -135,7 +141,7 @@ interface MessageDao {
         WHERE state IN ('PENDING','RETRY_WAIT') AND retryWindowStartedAt<=:before""")
     suspend fun expireOutstanding(before: Long): Int
 
-    @Query("DELETE FROM messages WHERE state='SUCCEEDED' AND lastAttemptAt<:before")
+    @Query("DELETE FROM messages WHERE (state='SUCCEEDED' AND lastAttemptAt<:before) OR (state='CANCELLED' AND receivedAt<:before)")
     suspend fun deleteOldCompleted(before: Long): Int
 
     @Query("""UPDATE messages SET bodyCipher='', payloadCipher='', endpointCipher=''
@@ -144,12 +150,36 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE state='SUCCEEDED'")
     suspend fun clearCompleted(): Int
+
+    @Query("""UPDATE messages SET state='CANCELLED', leaseToken=NULL, leaseUntil=0,
+        leaseElapsedUntil=0, lastError='卡片周期已更新或提醒已关闭'
+        WHERE cardId=:cardId AND state IN ('PENDING','RETRY_WAIT','IN_FLIGHT','NEEDS_ATTENTION')""")
+    suspend fun cancelCard(cardId: String)
 }
 
-@Database(entities = [RelayMessage::class], version = 2, exportSchema = true)
+@Database(entities = [RelayMessage::class, EsimCard::class, EsimReminderEvent::class], version = 3, exportSchema = true)
 abstract class RelayDatabase : RoomDatabase() {
     abstract fun messages(): MessageDao
+    abstract fun cards(): EsimDao
     companion object {
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN cardId TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN cardRuleVersion INTEGER")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS esim_cards (
+                    id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, infoCipher TEXT NOT NULL,
+                    expiresAt INTEGER NOT NULL, zoneId TEXT NOT NULL, periodCount INTEGER NOT NULL,
+                    periodUnit TEXT NOT NULL, reminderEnabled INTEGER NOT NULL, leadMinutes INTEGER NOT NULL,
+                    repeatMinutes INTEGER NOT NULL, localEnabled INTEGER NOT NULL, wecomEnabled INTEGER NOT NULL,
+                    nextReminderAt INTEGER, revision INTEGER NOT NULL, ruleVersion INTEGER NOT NULL,
+                    cycleStartedAt INTEGER, lastRenewedAt INTEGER, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)""")
+                db.execSQL("""CREATE TABLE IF NOT EXISTS esim_reminder_events (
+                    id TEXT NOT NULL PRIMARY KEY, cardId TEXT NOT NULL, ruleVersion INTEGER NOT NULL,
+                    scheduledAt INTEGER NOT NULL, createdAt INTEGER NOT NULL, localState TEXT NOT NULL,
+                    wecomEnabled INTEGER NOT NULL)""")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_esim_reminder_events_cardId_ruleVersion_scheduledAt ON esim_reminder_events(cardId, ruleVersion, scheduledAt)")
+            }
+        }
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN nextPartIndex INTEGER NOT NULL DEFAULT 0")

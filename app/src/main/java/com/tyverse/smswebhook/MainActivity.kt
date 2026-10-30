@@ -27,6 +27,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        intent.getStringExtra("card_id")?.let(model::openCard)
         setContent {
             SMSWebhookTheme {
                 RelayApp(model,
@@ -41,6 +42,11 @@ class MainActivity : ComponentActivity() {
         }
     }
     override fun onResume() { super.onResume(); model.refreshPermissions() }
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        intent.getStringExtra("card_id")?.let(model::openCard)
+    }
     private fun openSettings(intent: Intent) {
         runCatching { startActivity(intent) }.onFailure { model.notify("无法打开此系统设置，请手动进入应用设置") }
     }

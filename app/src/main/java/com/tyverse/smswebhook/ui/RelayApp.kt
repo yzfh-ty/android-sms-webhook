@@ -34,10 +34,11 @@ import com.tyverse.smswebhook.webhook.WebhookProtocol
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
+import com.tyverse.smswebhook.esim.EsimPolicy
 
-private val pageTitles = listOf("概览", "投递记录", "企业微信机器人", "运行诊断")
-private val navTitles = listOf("概览", "记录", "设置", "诊断")
-private val navIcons = listOf(R.drawable.ic_overview, R.drawable.ic_records, R.drawable.ic_settings, R.drawable.ic_health)
+private val pageTitles = listOf("概览", "eSIM 卡片", "投递记录", "企业微信机器人", "运行诊断")
+private val navTitles = listOf("概览", "卡片", "记录", "设置", "诊断")
+private val navIcons = listOf(R.drawable.ic_overview, R.drawable.ic_cards, R.drawable.ic_records, R.drawable.ic_settings, R.drawable.ic_health)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -53,6 +54,9 @@ fun RelayApp(model: RelayViewModel, requestSms: () -> Unit, requestNotifications
     val draft by model.draft.collectAsState()
     val dirty by model.dirty.collectAsState()
     val detail by model.detail.collectAsState()
+    val cards by model.cards.collectAsState()
+    val cardTarget by model.cardTarget.collectAsState()
+    LaunchedEffect(cardTarget) { if (cardTarget != null) page = 1 }
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(feedback.message) {
         if (feedback.message.isNotEmpty()) { snackbar.showSnackbar(feedback.message); model.clearNotice() }
@@ -80,10 +84,13 @@ fun RelayApp(model: RelayViewModel, requestSms: () -> Unit, requestNotifications
             if (feedback.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             when (page) {
                 0 -> Overview(config, stats, records.take(3), permissions, feedback.busy || !feedback.ready,
-                    model::toggle, { page = 2 }, { page = 1 }, requestSms, model::showDetail)
-                1 -> Records(records, feedback.busy, model::showDetail, model::retry, model::clearCompleted)
-                2 -> SettingsPage(draft, model::edit, dirty, feedback.busy || !feedback.ready, model::save, model::test)
-                3 -> Diagnostics(config, permissions, root, feedback.busy, requestSms, requestNotifications,
+                    model::toggle, { page = 3 }, { page = 2 }, requestSms, model::showDetail,
+                    cards.count { EsimPolicy.status(it.card.expiresAt, it.card.leadMinutes, System.currentTimeMillis()) == "已到期" },
+                    cards.count { EsimPolicy.status(it.card.expiresAt, it.card.leadMinutes, System.currentTimeMillis()) == "即将到期" }, { page = 1 })
+                1 -> EsimPage(model, permissions, feedback.busy, requestNotifications, openAppSettings)
+                2 -> Records(records, feedback.busy, model::showDetail, model::retry, model::clearCompleted)
+                3 -> SettingsPage(draft, model::edit, dirty, feedback.busy || !feedback.ready, model::save, model::test)
+                4 -> Diagnostics(config, permissions, root, feedback.busy, requestSms, requestNotifications,
                     openBattery, openAppSettings, model::checkRoot, model::addWhitelist,
                     model::removeWhitelist, model::recover)
             }
@@ -95,8 +102,18 @@ fun RelayApp(model: RelayViewModel, requestSms: () -> Unit, requestNotifications
 @Composable
 private fun Overview(config: RelaySettings, stats: QueueStats, recent: List<RelayMessage>,
     permissions: PermissionState, busy: Boolean, toggle: (Boolean) -> Unit, settings: () -> Unit,
-    records: () -> Unit, requestSms: () -> Unit, detail: (String) -> Unit) {
+    records: () -> Unit, requestSms: () -> Unit, detail: (String) -> Unit,
+    expiredCards: Int, dueCards: Int, openCards: () -> Unit) {
     LazyColumn(contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(18.dp)) {
+        item {
+            Card(onClick = openCards, modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("eSIM 卡片", style = MaterialTheme.typography.titleMedium)
+                    Text("已到期 $expiredCards 张 · 即将到期 $dueCards 张")
+                    Text("查看与管理卡片 →", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
         item {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
                 shape = RoundedCornerShape(24.dp)) {
@@ -288,7 +305,7 @@ private fun MessageCard(row: RelayMessage, enabled: Boolean, onClick: () -> Unit
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (row.source == "test") "测试通知" else maskSender(row.sender),
+                Text(when (row.source) { "test" -> "测试通知"; "esim_reminder" -> row.sender; else -> maskSender(row.sender) },
                     style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                 StatusBadge(if (row.state == DeliveryState.SUCCEEDED && row.lastBusinessCode == null) "LEGACY_COMPLETED" else row.state)
             }
@@ -355,6 +372,7 @@ private fun MessageDialog(detail: MessageDetail, currentUrl: String, busy: Boole
             DeliveryState.IN_FLIGHT -> "发送中"
             DeliveryState.RETRY_WAIT -> "等待重试"
             DeliveryState.PAUSED -> "已暂停"
+            DeliveryState.CANCELLED -> "已取消"
             else -> "需处理"
         }, modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
             style = MaterialTheme.typography.labelSmall)

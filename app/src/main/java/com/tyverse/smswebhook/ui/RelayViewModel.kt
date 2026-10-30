@@ -14,6 +14,7 @@ import com.tyverse.smswebhook.data.QueueStats
 import com.tyverse.smswebhook.data.RelaySettings
 import com.tyverse.smswebhook.data.UserInputException
 import com.tyverse.smswebhook.root.RootStatus
+import com.tyverse.smswebhook.esim.*
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,7 +27,7 @@ import kotlinx.coroutines.withContext
 
 data class UiFeedback(val busy: Boolean = false, val message: String = "", val ready: Boolean = false)
 data class PermissionState(val sms: Boolean = false, val notifications: Boolean = false,
-    val batteryExempt: Boolean = false)
+    val batteryExempt: Boolean = false, val cardNotifications: Boolean = false)
 
 class RelayViewModel(application: Application) : AndroidViewModel(application) {
     private val c = (application as RelayApplication).container
@@ -39,6 +40,32 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
         .stateIn(viewModelScope, sharing, emptyList())
     val stats = c.repository.dao.observeStats().catch { notify("无法读取队列统计") }
         .stateIn(viewModelScope, sharing, QueueStats())
+    val cards = c.esim.cards.catch { notify("无法读取卡片资料，请检查存储和加密密钥") }
+        .stateIn(viewModelScope, sharing, emptyList())
+    val cardResults = c.esim.results.catch { notify("无法读取提醒结果") }
+        .stateIn(viewModelScope, sharing, emptyMap())
+    private val _cardDraft = MutableStateFlow<EsimDraft?>(null)
+    val cardDraft = _cardDraft.asStateFlow()
+    private val _cardEditorError = MutableStateFlow("")
+    val cardEditorError = _cardEditorError.asStateFlow()
+    private val _cardTarget = MutableStateFlow<String?>(null)
+    val cardTarget = _cardTarget.asStateFlow()
+    fun openCard(id: String) { _cardTarget.value = id }
+    fun closeCard() { _cardTarget.value = null }
+    fun newCard() { _cardEditorError.value = ""; _cardDraft.value = EsimDraft() }
+    fun editCard(view: EsimCardView) { _cardEditorError.value = ""; _cardDraft.value = EsimDraft.from(view) }
+    fun dismissCardEditor() { _cardDraft.value = null }
+    fun saveCard(draft: EsimDraft) = action {
+        _cardEditorError.value = ""
+        c.esim.save(draft); _cardDraft.value = null; notify("卡片已保存")
+    }
+    fun renewCard(card: EsimCard) = action {
+        val renewed = c.esim.renew(card.id, card.revision)
+        notify("已续期，新到期时间：${EsimPolicy.format(renewed.expiresAt, renewed.zoneId)}")
+    }
+    fun deleteCard(card: EsimCard) = action {
+        c.esim.delete(card.id, card.revision); closeCard(); notify("卡片已删除")
+    }
     private val _draft = MutableStateFlow(EndpointDraft())
     val draft = _draft.asStateFlow()
     private val _dirty = MutableStateFlow(false)
@@ -67,7 +94,8 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
             ContextCompat.checkSelfPermission(app, Manifest.permission.RECEIVE_SMS) == PackageManager.PERMISSION_GRANTED,
             Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(app,
                 Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED,
-            c.root.isExempt())
+            c.root.isExempt(), c.notifications.cardNotificationsAvailable())
+        viewModelScope.launch(Dispatchers.IO) { runCatching { c.esim.recover() } }
     }
     fun save() = action {
         c.repository.saveEndpoint(_draft.value); _dirty.value = false; notify("机器人配置已保存")
@@ -87,7 +115,7 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
         c.repository.retry(id, currentEndpoint = true); notify("已安排重试")
     }
     fun showDetail(id: String) = action { _detail.value = c.repository.detail(id) }
-    fun recover() = action { c.repository.recover(); notify("队列已检查") }
+    fun recover() = action { c.repository.recover(); c.esim.recover(); notify("队列和卡片提醒已检查") }
     fun clearCompleted() = action {
         val count = c.repository.dao.clearCompleted(); notify("已清理 $count 条已发送记录")
     }
@@ -101,9 +129,13 @@ class RelayViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try { withContext(Dispatchers.IO) { block() } }
             catch (e: CancellationException) { throw e }
-            catch (e: UserInputException) { notify(e.message ?: "请检查输入") }
-            catch (_: Exception) { notify("操作未完成，请检查权限、存储或加密密钥后重试") }
+            catch (e: UserInputException) { failed(e.message ?: "请检查输入") }
+            catch (_: Exception) { failed("操作未完成，请检查权限、存储或加密密钥后重试") }
             finally { _feedback.value = _feedback.value.copy(busy = false) }
         }
+    }
+    private fun failed(message: String) {
+        if (_cardDraft.value != null) _cardEditorError.value = message
+        notify(message)
     }
 }

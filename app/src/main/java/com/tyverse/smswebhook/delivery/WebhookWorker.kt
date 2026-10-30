@@ -23,7 +23,8 @@ class WebhookWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         val now = System.currentTimeMillis()
         c.settings.workerRan(now)
         val existing = c.repository.dao.get(id) ?: return Result.success()
-        if (existing.source != "test" && !c.settings.current().enabled) {
+        if (!c.esim.isActive(existing)) return Result.success()
+        if (existing.source == "sms_broadcast" && !c.settings.current().enabled) {
             c.repository.dao.pauseSms()
             return Result.success()
         }
@@ -53,7 +54,7 @@ class WebhookWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 endpointError != null -> HttpOutcome(false, error = endpointError)
                 DeliveryPolicy.expired(row.retryWindowStartedAt, claimedAt) -> HttpOutcome(false, error = "自动投递期限已到，请手动处理")
                 row.attempts > DeliveryPolicy.MAX_ATTEMPTS -> HttpOutcome(false, error = "自动重试次数已到上限")
-                row.source != "test" && !c.settings.current().enabled -> {
+                row.source == "sms_broadcast" && !c.settings.current().enabled -> {
                     c.repository.dao.pauseSms()
                     return Result.success()
                 }
@@ -62,7 +63,7 @@ class WebhookWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                     var result = HttpOutcome(true, code = 200, businessCode = 0)
                     var part = row.nextPartIndex
                     while (part < parts.size) {
-                        if (row.source != "test" && !c.settings.current().enabled) {
+                        if (row.source == "sms_broadcast" && !c.settings.current().enabled) {
                             c.repository.dao.pauseSms()
                             return Result.success()
                         }
@@ -74,6 +75,7 @@ class WebhookWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                         }
                         val lease = c.repository.dao.get(id)
                         if (lease?.leaseToken != token || lease.state != DeliveryState.IN_FLIGHT) return Result.success()
+                        if (!c.esim.isActive(row)) return Result.success()
                         result = c.http.send(target, parts[part])
                         if (!result.success) {
                             if (result.businessCode == 45009) c.settings.deferRobot(target.url,

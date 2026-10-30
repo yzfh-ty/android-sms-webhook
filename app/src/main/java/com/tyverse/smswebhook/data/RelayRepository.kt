@@ -119,8 +119,15 @@ class RelayRepository(private val context: Context, val database: RelayDatabase,
     suspend fun retry(id: String, currentEndpoint: Boolean = false) = withContext(Dispatchers.IO) {
         mutation.withLock {
             val row = dao.get(id) ?: throw UserInputException("记录不存在")
-            if (row.source != "test" && !settings.current().enabled) throw UserInputException("请先开启转发，再重试短信任务")
+            if (row.source == "sms_broadcast" && !settings.current().enabled) throw UserInputException("请先开启转发，再重试短信任务")
             database.withTransaction {
+                if (row.source == "esim_reminder") {
+                    val card = row.cardId?.let { database.cards().get(it) }
+                    if (card == null || !card.reminderEnabled || !card.wecomEnabled || card.ruleVersion != row.cardRuleVersion)
+                        throw UserInputException("该卡片提醒已失效，请查看当前卡片")
+                    if (database.cards().latest(card.id, card.ruleVersion)?.id != row.id)
+                        throw UserInputException("该卡片已有更新的提醒，请查看当前卡片")
+                }
                 if (currentEndpoint) {
                     val draft = draft()
                     WebhookProtocol.validationError(draft.url, BuildConfig.DEBUG)?.let { throw UserInputException(it) }

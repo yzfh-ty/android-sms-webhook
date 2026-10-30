@@ -13,7 +13,7 @@ class BootReceiver : BroadcastReceiver() {
         val pending = goAsync()
         val c = (context.applicationContext as RelayApplication).container
         c.scope.launch {
-            try { withTimeout(8_000) { c.repository.recover() } }
+            try { withTimeout(8_000) { c.repository.recover(); c.esim.recover() } }
             catch (_: Exception) { runCatching { c.settings.error("重启恢复尚未完成，请打开应用检查队列") } }
             finally { pending.finish() }
         }
